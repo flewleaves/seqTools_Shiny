@@ -1,13 +1,12 @@
 check <- function(state, check_list){
   
   for(i in check_list){
-     if(!i %in% names(data)){
+     if(!i %in% names(state$data) && !i %in% names(state$res) && !i %in% names(state$meta)){
        showNotification(paste0("失败:未读入", i), type = "error")
        return(FALSE)
      }
   }
-  return(TRUE)
-    
+  TRUE
 }
 
 
@@ -18,7 +17,7 @@ normalize <- function(state, inputs, session, ns) {
   }
 
   # 2. 如果需要 TPM 但没有基因长度 → 弹窗交互，中断本次运行
-  if (inputs$method == "TPM" && is.null(state$gene.length)) {
+  if (inputs$method == "TPM" && is.null(state$meta[["gene.length"]])) {
     showModal(modalDialog(
       title = "缺少基因长度",
       "是否使用标准基因长度进行 TPM 标准化？（可能引入误差）",
@@ -29,7 +28,7 @@ normalize <- function(state, inputs, session, ns) {
     ))
 
     observeEvent(input$get_length, {
-      state$gene.length <- seqTools::get_standard_gene_length(
+      state$meta$gene.length <- seqTools::get_standard_gene_length(
         state$data[["count"]], species = state$meta[["species"]], from = state$meta[["id_type"]]
       )
       removeModal()
@@ -38,7 +37,7 @@ normalize <- function(state, inputs, session, ns) {
           state$data[["count"]],
           method = inputs$method,
           group = state$meta[["group_info"]],
-          gene.length = state$gene.length
+          gene.length = state$meta$gene.length
         )
         showNotification("标准化完成", type = "message")
       }, error = function(e) {
@@ -60,7 +59,7 @@ normalize <- function(state, inputs, session, ns) {
       state$data[["count"]],
       method = inputs$method,
       group = state$meta[["group_info"]],
-      gene.length = state$gene.length
+      gene.length = state$meta$gene.length
     )
     showNotification("标准化完成", type = "message")
   }, error = function(e) {
@@ -97,4 +96,24 @@ expr_filter <- function(state, inputs, session, ns){
     }
   }
   state$data <- mats
+}
+
+read_vector <- function(text, state, optional = FALSE) {
+  # 允许为空，且输入为空 → 返回 NULL
+  if (optional && (is.null(text) || trimws(text) == "")) {
+    return(NULL)
+  }
+
+  # 不允许为空 → 即使输入为空，也继续向下传递，让下游报错
+  words <- strsplit(gsub(" ", "", text %||% ""), ";")[[1]]
+
+  # 如果是基因名（非 HEX 颜色），进行大小写转换
+  if (length(words) > 0 && !stringr::str_detect(words[1], "^#")) {
+    words <- if (state$meta$species == "Mouse") {
+      stringr::str_to_title(words)
+    } else {
+      toupper(words)
+    }
+  }
+  words
 }

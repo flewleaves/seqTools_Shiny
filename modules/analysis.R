@@ -1,32 +1,9 @@
-
-
 analysis_ui <- function(id) {
   ns <- NS(id)
-
-  # 根据分类生成按钮面板
-  make_tool_panel <- function(tool_ids) {
-    buttons <- lapply(tool_ids, function(tid) {
-      if (tid %in% names(tools)) {
-        actionButton(ns(paste0("run_", tid)), tools[[tid]]$name,
-                     class = "btn-outline-primary btn-sm m-1")
-      }
-    })
-    do.call(tagList, buttons)
-  }
-
-  # 构建 accordion
-  panels <- lapply(names(tool_categories), function(cat) {
-    accordion_panel(cat, make_tool_panel(tool_categories[[cat]]))
-  })
-
   tagList(
-    accordion(
-      id = ns("tool_accordion"),
-      open = names(tool_categories)[1],   # 默认展开第一个
-      !!!panels
-    ),
+    # 动态生成工具面板（替换原来静态的 accordion）
+    uiOutput(ns("toolbar")),
     hr(),
-    # 输出区域：根据工具类型动态显示 plot 或 table
     uiOutput(ns("result_area"))
   )
 }
@@ -36,12 +13,51 @@ analysis_server <- function(id, state) {
     ns <- session$ns
     current_tool <- reactiveVal(NULL)
 
-    # ---------- 核心运行函数 ----------
+    # ---------- 动态生成工具面板 ----------
+    output$toolbar <- renderUI({
+      req(state$omics_type)   # 确保组学类型已设置
+      
+      # 辅助函数：从工具 ID 生成按钮
+      make_tool_panel <- function(tool_ids) {
+        buttons <- lapply(tool_ids, function(tid) {
+          if (tid %in% names(tools)) {
+            actionButton(ns(paste0("run_", tid)), tools[[tid]]$name,
+                         class = "btn-outline-primary btn-sm m-1")
+          }
+        })
+        do.call(tagList, buttons)
+      }
+      
+      # 过滤工具：保留通用工具或匹配当前组学类型的工具
+      omics_type <- state$omics_type
+      panels <- lapply(names(tool_categories), function(cat) {
+        tool_ids <- tool_categories[[cat]]
+        valid_ids <- Filter(function(tid) {
+          tool <- tools[[tid]]
+          is.null(tool$omics) || omics_type %in% tool$omics
+        }, tool_ids)
+        if (length(valid_ids) > 0) {
+          accordion_panel(cat, make_tool_panel(valid_ids))
+        } else {
+          NULL
+        }
+      })
+      # 移除空分类
+      panels <- Filter(Negate(is.null), panels)
+      
+      accordion(
+        id = ns("tool_accordion"),
+        open = names(tool_categories)[1],
+        !!!panels
+      )
+    })
+
+    # ---------- 核心运行函数（完全不变） ----------
     run_tool <- function(tid, inputs) {
       tool <- tools[[tid]]
       tryCatch({
         if (!is.null(tool$run)) {
-          tool$run(state, inputs, session, ns)   # 传递 session 和 ns
+          tool$run(state, inputs, session, ns)
         }
         current_tool(tid)
         showNotification(paste(tool$name, "完成"), type = "message")
@@ -50,15 +66,12 @@ analysis_server <- function(id, state) {
       })
     }
 
-    # ---------- 为所有工具绑定主按钮 ----------
+    # ---------- 按钮绑定（完全不变） ----------
     lapply(names(tools), function(tid) {
       observeEvent(input[[paste0("run_", tid)]], {
         tool <- tools[[tid]]
-        
         if (!is.null(tool$params)) {
-          # 获取基础参数结构
-          param_data <- tool$params(ns, state)
-          
+          param_data <- tool$params(ns,state)
           showModal(modalDialog(
             title = paste("设置参数 -", tool$name),
             param_data$ui,
@@ -73,17 +86,14 @@ analysis_server <- function(id, state) {
       })
     })
 
-    # ---------- 为有参数的工具绑定确认/取消 ----------
+    # ---------- 确认/取消绑定（完全不变） ----------
     lapply(names(tools), function(tid) {
       tool <- tools[[tid]]
       if (!is.null(tool$params)) {
-        observeEvent(input[[paste0("cancel_", tid)]], {
-          removeModal()
-        })
+        observeEvent(input[[paste0("cancel_", tid)]], removeModal())
         observeEvent(input[[paste0("confirm_", tid)]], {
-          param_data <- tool$params(ns,state)   # 再次获取 ids
+          param_data <- tool$params(ns,state)
           ids <- param_data$ids
-          # 从模块命名空间里收集参数值
           inputs_list <- setNames(lapply(ids, function(p) input[[p]]), ids)
           removeModal()
           run_tool(tid, inputs_list)
@@ -91,7 +101,7 @@ analysis_server <- function(id, state) {
       }
     })
 
-    # ---------- 动态输出区域 ----------
+    # ---------- 动态输出区域（完全不变） ----------
     output$result_area <- renderUI({
       req(current_tool())
       tool <- tools[[current_tool()]]
@@ -104,7 +114,6 @@ analysis_server <- function(id, state) {
       }
     })
 
-    # ---------- 渲染函数 ----------
     output$result_plot <- renderPlot({
       req(current_tool())
       req(tools[[current_tool()]]$plot)

@@ -2,11 +2,10 @@
 create_state <- function() {
   reactiveValues(
     name = NULL,
+    omics_type = NULL,
     meta = list(),
     data = list(),
-    gene.length = NULL,
-    pca = NULL,
-    deg_res = NULL,
+    res = list(),
     settings = list(
       work_dir = getwd(),
       norm_method = "log2",
