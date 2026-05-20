@@ -3,6 +3,9 @@ library(bslib)
 library(DT)
 library(seqTools)
 library(shinyWidgets)
+library(shinyalert)
+library(geneSync)
+library(ggraph)
 
 # source 所有文件（按依赖顺序）
 source("utils/state.R")

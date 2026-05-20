@@ -3,7 +3,6 @@ data_ui <- function(id) {
   layout_sidebar(
     sidebar = sidebar(
       title = "读取数据",
-      
       # 选择组学类型的按钮组（高亮）
       shinyWidgets::radioGroupButtons(
         inputId = ns("import_method"),
@@ -113,15 +112,29 @@ data_server <- function(id, state, nav_session) {
                        type = "message", duration = 5)
       
       if (!is.null(detected$id_type) && detected$id_type != "SYMBOL") {
-        showModal(modalDialog(
+        shinyalert(
           title = "ID 转换提示",
-          p(paste0("检测到基因 ID 类型为 ", detected$id_type, "，是否转换为 SYMBOL？")),
-          footer = tagList(
-            actionButton(ns("skip_convert"), "否，保持原样"),
-            actionButton(ns("do_convert"), "是，转换", class = "btn-primary")
-          ),
-          easyClose = FALSE
-        ))
+          text = paste0("检测到基因 ID 类型为 ", detected$id_type, "，是否转换为 SYMBOL？"),
+          type = "info",
+          showCancelButton = TRUE,
+          confirmButtonText = "是，转换",
+          cancelButtonText = "否，保持原样",
+          callbackR = function(value) {
+            if (value) {
+              tryCatch({
+                colnames(state$temp_df)[1] <- "Geneid"
+                state$temp_df <- seqTools::Quick_ID_conversion(
+                  state$temp_df, species = state$meta[["species"]],
+                  from = state$meta[["id_type"]], to = "SYMBOL"
+                )
+                state$meta[["id_type"]] <- "SYMBOL"
+              }, error = function(e) {
+                showNotification(paste("失败:", e$message), type = "error", duration = NULL)
+              })
+            }
+            # value = FALSE 时什么都不做，保持原样
+          }
+        )
       }
     })
 
@@ -129,10 +142,7 @@ data_server <- function(id, state, nav_session) {
       state$temp_df <- NULL
       removeModal()
     })
-    observeEvent(input$skip_convert, {
-      removeModal()
-    })
-
+  
     # ---- 3. RNA‑seq：手动属性更新 ----
     observeEvent(input$data_type, {
       req(input$import_method == "bulk_rna")
@@ -170,18 +180,6 @@ data_server <- function(id, state, nav_session) {
       })
     })
 
-    observeEvent(input$do_convert, {
-      tryCatch({
-        colnames(state$temp_df)[1] <- "Geneid"
-        state$temp_df <- seqTools::Quick_ID_conversion(
-          state$temp_df, species = state$meta[["species"]],
-          from = state$meta[["id_type"]], to = "SYMBOL"
-        )
-        state$meta[["id_type"]] <- "SYMBOL"
-      }, error = function(e) {
-        showNotification(paste("失败:", e$message), type = "error", duration = NULL)
-      })
-    })
 
     # ====================================================================
     #   通用确认输入按钮（所有导入方法共用）

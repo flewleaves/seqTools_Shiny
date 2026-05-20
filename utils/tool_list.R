@@ -19,7 +19,8 @@ tools <- list(
     run = function(state, inputs, session, ns) {
       normalize(state, inputs, session, ns)
     },
-    plot = function(state) NULL
+    plot = function(state) NULL,
+    table = function(state) NULL
   ),
 
   filter = list(
@@ -43,7 +44,8 @@ tools <- list(
     run = function(state, inputs, session, ns) {
       expr_filter(state, inputs, session, ns)
     },
-    plot = function(state) NULL
+    plot = function(state) NULL,
+    table = function(state) NULL
   ),
 
   # ========== 差异/富集分析 ==========
@@ -81,13 +83,60 @@ tools <- list(
       state$res$deg_res <- DEG_analysis_v2(state$data[[inputs$deg_input]], group = state$meta[["group_info"]], contrast = inputs$contrast,
       p.value = inputs$padj_threshold, logFC = inputs$logFC_threshold, FilterGene = inputs$filter, log_transformed = state$meta[["log_state"]])
       state$res$deg_res <- na.omit(state$res$deg_res)
+      state$meta$deg_contrast <- inputs$contrast
       showNotification("差异分析完成", type = "message")
     },
-    plot = function(state) {
+    plot = function(state) NULL,
+    table = function(state) {
       req(state$res$deg_res)
       DT::datatable(state$res$deg_res)
     }
   ),
+  gsea = list(
+      name = "GSEA分析",
+      category = "差异/富集分析",
+      params = function(ns, state){
+        list(
+          ui = tagList(
+            selectInput(ns("ranking_mat"), "基因排序方法",
+                      choices = c("logFC", "Signal-to-noise", "Signed-p"),
+                      selected = "logFC"),
+            selectInput(ns("geneset_gsea"), "参考基因集",
+                      choices = c("GO", "KEGG", "Reactome"),
+                      selected = "GO"),
+            fileInput(ns("custom_gsea"), "GSEA数据库下载的参考基因集(.gmt)", 
+                      accept = c(".gmt")),
+            numericInput(ns("padj_gsea"), "Adjusted p阈值(1为保留全部结果)", value = 1, min = 0, max = 1),
+            numericInput(ns("ppadj_gsea"), "绘图时Adjusted p阈值", value = 0.05, min = 0, max = 1),
+            numericInput(ns("minGS_gsea"), "参与分析的最小基因集大小", value = 10, min = 0),
+            numericInput(ns("maxGS_gsea"), "参与分析的最大基因集大小", value = 500, min = 0),
+            numericInput(ns("top_n_gsea"), "结果图展示前", value = 10, min = 1),
+          ), 
+          ids = c("ranking_mat","geneset_gsea", "custom_gsea", "padj_gsea","ppadj_gsea", "minGS_gsea", "maxGS_gsea","top_n_gsea")
+        )
+      },
+      output_type = "both",
+      run = function(state, inputs, session, ns){
+          run_gsea(state,inputs, session, ns)
+          attr(state$res$gsea_res, "plot_params") <- list(
+            topn   = inputs$top_n_gsea,
+            pajust = inputs$ppadj_gsea
+          )
+      },
+      plot = function(state) {
+        req(state$res$gsea_res)
+        params <- attr(state$res$gsea_res, "plot_params")
+        GseaVis::dotplotGsea(
+          data   = state$res$gsea_res,
+          topn   = params$topn,
+          pajust = params$pajust
+        )$plot
+      },
+      table = function(state){
+        req(state$res$gsea_res)
+        DT::datatable(state$res$gsea_res@result)
+      }
+    ),
 
   # ========== 数据绘图 ==========
   pca = list(
@@ -115,7 +164,8 @@ tools <- list(
     plot = function(state) {
       req(state$res$pca_res)
       state$res$pca_res
-    }
+    },
+     table = function(state) NULL
   ),
 
   volcano = list(
@@ -150,7 +200,44 @@ tools <- list(
     plot = function(state) {
         req(state$res$vol_res)
         state$res$vol_res
-    }
+    },
+     table = function(state) NULL
+  ),
+  gseaPlot = list(
+    name = "GSEA通路图",
+    category = "数据绘图",
+    params = function(ns, state){
+      list(
+        ui = tagList(
+          textAreaInput(ns("id_gsea"), "目标通路名称", rows = 2),
+          numericInput(ns("np_gsea"), "显示几张分图", value = 3, min = 0, max = 3),
+          selectInput(ns("addp_gsea"), "是否在结果图中添加p值和富集分数", choices = c(TRUE, FALSE), selected = TRUE),
+          numericInput(ns("x_gsea"), "p值标签X坐标", value = 0.95),
+          numericInput(ns("y_gsea"), "p值标签Y坐标", value = 0.8),
+        ),
+        ids = c("id_gsea","np_gsea","addp_gsea","x_gsea","y_gsea")
+      )
+    },  
+    output_type = "plot",
+    run = function(state, inputs, session, ns){
+        if (!check(state, "gsea_res")) {
+          showNotification("请先进行GSEA分析", type = "error")
+          return()
+        }
+        state$res$gsea_plot <- GseaVis::gseaNb(
+          object= state$res$gsea_res,
+          geneSetID= inputs$id_gsea,
+          subPlot= inputs$np_gsea, 
+          addPval= as.logical(inputs$addp_gsea), 
+          pvalX= inputs$x_gsea,
+          pvalY= inputs$y_gsea 
+        )
+    },  
+    plot = function(state) {
+        req(state$res$gsea_res)
+        state$res$gsea_plot
+    },
+     table = function(state) NULL
   ),
 
   # ========== 表格查看 ==========
@@ -180,12 +267,9 @@ tools <- list(
 )
 
 # 分类配置 —— 控制 accordion 面板显示哪些工具
-tool_categories <- list(
-  "数据处理"      = c("normalize", "filter"),
-  "差异/富集分析" = c("deg"),
-  "数据绘图"      = c("pca", "volcano"),
-  "表格查看"      = c("count_table", "norm_table")
+tool_categories <- split(
+  names(tools),                    # ← 工具 ID：normalize, filter, deg...
+  sapply(tools, `[[`, "category")  # ← 按 category 分组
 )
-
 
 

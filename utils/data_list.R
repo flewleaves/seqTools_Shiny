@@ -7,7 +7,7 @@ import_methods <- list(
         fileInput(ns("infile"), "选择 CSV/TXT", accept = c(".csv", ".txt")),
         hr(),
         selectInput(ns("data_type"), "数据类型",
-                    choices = c("", "count", "TPM", "FPKM", "CPM"),
+                    choices = c("", "count", "tpm", "fpkm", "cpm"),
                     selected = ""),
         selectInput(ns("log_state"), "是否log化",
                     choices = c("", TRUE, FALSE), selected = ""),

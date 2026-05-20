@@ -9,6 +9,13 @@ check <- function(state, check_list){
   TRUE
 }
 
+sp_trans <- function(species){
+   if(species == "Mouse"){
+     "Mm"
+   }else{
+     "Hs"
+   }
+}
 
 normalize <- function(state, inputs, session, ns) {
   # 1. 基础检查
@@ -17,40 +24,35 @@ normalize <- function(state, inputs, session, ns) {
   }
 
   # 2. 如果需要 TPM 但没有基因长度 → 弹窗交互，中断本次运行
-  if (inputs$method == "TPM" && is.null(state$meta[["gene.length"]])) {
-    showModal(modalDialog(
+   if (inputs$method == "tpm" && is.null(state$meta[["gene.length"]])) {
+    shinyalert(
       title = "缺少基因长度",
-      "是否使用标准基因长度进行 TPM 标准化？（可能引入误差）",
-      footer = tagList(
-        actionButton(ns("skip_length"), "否"),
-        actionButton(ns("get_length"), "是", class = "btn-primary")
-      )
-    ))
-
-    observeEvent(input$get_length, {
-      state$meta$gene.length <- seqTools::get_standard_gene_length(
-        state$data[["count"]], species = state$meta[["species"]], from = state$meta[["id_type"]]
-      )
-      removeModal()
-      tryCatch({
-        state$data[[toupper(inputs$method)]] <- seqTools::normalization(
-          state$data[["count"]],
-          method = inputs$method,
-          group = state$meta[["group_info"]],
-          gene.length = state$meta$gene.length
-        )
-        showNotification("标准化完成", type = "message")
-      }, error = function(e) {
-        showNotification(e$message, type = "error")
-      })
-    }, once = TRUE)
-
-    observeEvent(input$skip_length, {
-      removeModal()
-      # 用户取消，什么都不做
-    }, once = TRUE)
-
-    return()  # 直接返回，不执行下面的标准化
+      text = "是否使用标准基因长度进行 TPM 标准化？（可能引入误差）",
+      type = "warning",
+      showCancelButton = TRUE,
+      confirmButtonText = "是",
+      cancelButtonText = "否",
+      callbackR = function(value) {
+        if (value) {
+          state$meta$gene.length <- seqTools::get_standard_gene_length(
+            state$data[["count"]], species = state$meta[["species"]], from = state$meta[["id_type"]]
+          )
+          tryCatch({
+            state$data[[inputs$method]] <- seqTools::normalization(
+              state$data[["count"]],
+              method = inputs$method,
+              group = state$meta[["group_info"]],
+              gene.length = state$meta$gene.length
+            )
+            showNotification("标准化完成", type = "message")
+          }, error = function(e) {
+            showNotification(e$message, type = "error")
+          })
+        }
+        # value = FALSE（用户点"否"）→ 什么都不做
+      }
+    )
+    return()
   }
 
   # 3. 正常执行标准化
@@ -116,4 +118,35 @@ read_vector <- function(text, state, optional = FALSE) {
     }
   }
   words
+}
+
+run_gsea <- function(state, inputs, session, ns){
+  check(state, list("deg_res"))
+  req(state$res$deg_res)
+  geneList <- row.names(state$res$deg_res)
+          rg <- NULL
+          if(inputs$ranking_mat == "logFC"){
+            rg <- state$res$deg_res$log2FoldChange
+            names(rg) <- geneList
+          }else if(inputs$ranking_mat == "Signed-p"){
+            rg <- -log(state$res$deg_res$p.value)*sign(state$res$deg_res$log2FoldChange)
+            names(rg) <- geneList
+          }else{
+            if(!check(state, list("tpm"))){return()}
+            tryCatch({rg <- seqTools::s2nCalulator(state$data$tpm, group = state$meta$group_info, contrast = state$meta$deg_contrast)
+              rg <- na.omit(rg)
+              rg <- rg[names(rg) %in% geneList]
+            }, error = function(e){showNotification(e$message, type = "error")})
+          }
+          if(!is.null(rg)){
+             rg <- rg[order(rg, decreasing = TRUE)]
+             genesets <- if(!is.null(inputs$custom_gsea)){
+                clusterProfiler::read.gmt(inputs$custom_gsea)
+             }else{
+               inputs$geneset_gsea
+             }
+             state$res$gsea_res <- seqTools::quick_GSEA(rg, genesets = genesets, species = sp_trans(state$meta$species), from = state$meta$id_type,
+              p.value = inputs$padj_gsea, minGSSize = inputs$minGS_gsea, maxGSSize = inputs$maxGS_gsea)
+          }
+          
 }
