@@ -9,14 +9,6 @@ check <- function(state, check_list){
   TRUE
 }
 
-sp_trans <- function(species){
-   if(species == "Mouse"){
-     "Mm"
-   }else{
-     "Hs"
-   }
-}
-
 normalize <- function(state, inputs, session, ns) {
   # 1. 基础检查
   if (!check(state, "count")) {
@@ -73,7 +65,7 @@ expr_filter <- function(state, inputs, session, ns){
   n <- inputs$excluding_noncoding
   u <- inputs$excluding_unknown
   m <- inputs$min_count
-  if(u && state$meta[["species"]] == "Mouse"){
+  if(u && state$meta[["species"]] == "Mm"){
     kg <- org.Mm.eg.db::keys(org.Mm.eg.db::org.Mm.eg.db, keytype = state$meta[["id_type"]])
   }else{
     kg <- org.Hs.eg.db::keys(org.Hs.eg.db::org.Hs.eg.db, keytype = state$meta[["id_type"]])
@@ -111,7 +103,7 @@ read_vector <- function(text, state, optional = FALSE) {
 
   # 如果是基因名（非 HEX 颜色），进行大小写转换
   if (length(words) > 0 && !stringr::str_detect(words[1], "^#")) {
-    words <- if (state$meta$species == "Mouse") {
+    words <- if (state$meta$species == "Mm") {
       stringr::str_to_title(words)
     } else {
       toupper(words)
@@ -145,7 +137,7 @@ run_gsea <- function(state, inputs, session, ns){
              }else{
                inputs$geneset_gsea
              }
-             state$res$gsea_res <- seqTools::quick_GSEA(rg, genesets = genesets, species = sp_trans(state$meta$species), from = state$meta$id_type,
+             state$res$gsea_res <- seqTools::quick_GSEA(rg, genesets = genesets, species = state$meta$species, from = state$meta$id_type,
               p.value = inputs$padj_gsea, minGSSize = inputs$minGS_gsea, maxGSSize = inputs$maxGS_gsea)
           }
           

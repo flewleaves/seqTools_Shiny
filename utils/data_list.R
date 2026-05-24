@@ -12,7 +12,7 @@ import_methods <- list(
         selectInput(ns("log_state"), "是否log化",
                     choices = c("", TRUE, FALSE), selected = ""),
         selectInput(ns("species"), "物种",
-                    choices = c("", "Human", "Mouse"), selected = ""),
+                    choices = c("", Human = "Hs", Mouse = "Mm"), selected = ""),
         selectInput(ns("id_type"), "基因 ID 类型",
                     choices = c("", "SYMBOL", "ENSEMBL", "ENTREZID"), selected = ""),
         textAreaInput(ns("group_info"), "分组信息",
@@ -55,7 +55,7 @@ import_methods <- list(
         fileInput(ns("sc_features"), "基因信息 (features.tsv.gz)", accept = ".gz"),
         fileInput(ns("sc_barcodes"), "细胞条码 (barcodes.tsv.gz)", accept = ".gz"),
         hr(),
-        selectInput(ns("sc_species"), "物种", choices = c("", "Human", "Mouse"), selected = ""),
+        selectInput(ns("sc_species"), "物种", choices = c("", Human = "Hs", Mouse = "Mm"), selected = ""),
         textAreaInput(ns("sc_group_info"), "分组信息（可选）", rows = 2),
         hr()
       )
