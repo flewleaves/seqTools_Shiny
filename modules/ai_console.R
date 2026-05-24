@@ -3,7 +3,6 @@
 ai_console_ui <- function(id) {
   ns <- NS(id)
   tagList(
-    # Markdown 渲染样式
     tags$style(HTML("
       .ai-markdown {
         font-size: 13px;
@@ -222,7 +221,8 @@ ai_console_server <- function(id, state) {
       
       later::later(function() {
         tryCatch({
-          result <- call_ai(full_prompt, settings_list)
+          # 关键改动：传入 tools（全局变量）
+          result <- call_ai_with_tools(full_prompt, settings_list, state, tools, import_methods)
           ai_result(list(type = "success", value = result))
         }, error = function(e) {
           ai_result(list(type = "error", value = conditionMessage(e)))
@@ -241,7 +241,7 @@ ai_console_server <- function(id, state) {
           ui = tags$div(
             class = "ai-markdown",
             style = "background: #fff; border: 1px solid #dee2e6; padding: 8px 12px; margin: 4px 0 4px 20px; border-radius: 8px; color: #333;",
-            shiny::markdown(res$value)   # <-- Markdown 渲染
+            HTML(shiny::markdown(res$value))   # <-- 两处改动之一：HTML() 包裹
           ),
           immediate = TRUE
         )
@@ -251,7 +251,7 @@ ai_console_server <- function(id, state) {
           where = "beforeBegin",
           ui = tags$div(
             style = "color: #dc3545; margin: 4px 0 4px 20px;",
-            paste0("[ERR] ", res$value)
+            HTML(paste0("[ERR] ", res$value))   # <-- 两处改动之二：HTML() 包裹
           ),
           immediate = TRUE
         )
