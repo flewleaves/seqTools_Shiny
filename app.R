@@ -2,13 +2,12 @@
 
 source("global.R")
 
-source("global.R")
-
 init_config <- load_config()
 
 ui <- page_navbar(
   id = "main_nav",
   title = "seqTools",
+  shinyjs::useShinyjs(),
   nav_panel("项目管理", project_ui("proj")),
   nav_panel("数据预处理", data_ui("data")),
   nav_panel("分析", analysis_ui("anal")),
@@ -22,7 +21,7 @@ server <- function(input, output, session) {
   state <- create_state(config = init_config)
   
   project_server("proj", state)
-  data_server("data", state)
+  data_server("data", state, nav_session = session)
   analysis_server("anal", state)
   settings_server("set", state)
   ai_console_server("ai", state)

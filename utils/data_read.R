@@ -12,7 +12,7 @@ detect_data <- function(exp, meta) {
   #基因检测
   genes = exp[,gene_col, drop = TRUE]
   sg = genes[1:size] 
-  meta[["species"]] = ifelse(sum(stringr::str_to_title(sg) == sg) >= t*size, "Mouse", "Human")
+  meta[["species"]] = ifelse(sum(stringr::str_to_title(sg) == sg) >= t*size, "Mm", "Hs")
   
   if(sum(stringr::str_detect(sg, "ENSG") | stringr::str_detect(sg, "ENSMUSG")) >= t*size){
     meta[["id_type"]] = "ENSEMBL"

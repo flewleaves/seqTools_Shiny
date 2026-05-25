@@ -30,7 +30,7 @@ import_methods <- list(
     run = function(input, state, session, ns) {
       temp <- state$temp_df
       showNotification("去除重复基因中...", type = "message", duration = 5)
-      temp <- seqTools::remove_dup(temp, 1, method = state$settings$dup)
+      temp <- seqTools::remove_dup(temp, 1, method = state$settings$analysis$dup)
       showNotification(paste("保留", nrow(temp), "行"), type = "message", duration = 5)
       row.names(temp) <- temp[, 1]
       temp <- temp[, -1]

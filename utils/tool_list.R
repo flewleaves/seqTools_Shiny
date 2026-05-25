@@ -118,19 +118,16 @@ tools <- list(
       output_type = "both",
       run = function(state, inputs, session, ns){
           run_gsea(state,inputs, session, ns)
-          attr(state$res$gsea_res, "plot_params") <- list(
-            topn   = inputs$top_n_gsea,
-            pajust = inputs$ppadj_gsea
-          )
+          state$res$gsea_dotplot <- GseaVis::dotplotGsea(
+          data   = state$res$gsea_res,
+          topn   = inputs$top_n_gsea,
+          pajust = inputs$padj_gsea
+          )$plot
       },
       plot = function(state) {
         req(state$res$gsea_res)
         params <- attr(state$res$gsea_res, "plot_params")
-        GseaVis::dotplotGsea(
-          data   = state$res$gsea_res,
-          topn   = params$topn,
-          pajust = params$pajust
-        )$plot
+        state$res$gsea_dotplot
       },
       table = function(state){
         req(state$res$gsea_res)
@@ -240,30 +237,43 @@ tools <- list(
      table = function(state) NULL
   ),
 
-  # ========== 表格查看 ==========
-  count_table = list(
-    name = "Count矩阵",
-    category = "表格查看",
-    params = NULL,
-    output_type = "table",
-    run = function(state, inputs, session, ns) NULL,
-    plot = function(state) {
-      req(state$data[["count"]])
-      DT::datatable(state$data[["count"]])
+  # ========== 结果查看 ==========
+  vis = list(
+  name = "结果查看",
+  category = "结果查看",
+  params = function(ns,state) {   
+    all_names <- c(names(state$res), names(state$data))
+    if (length(all_names) == 0) all_names <- c("暂无结果" = "")
+    list(
+      ui = selectInput(ns("vis"), "选择结果", choices = all_names),
+      ids = "vis"
+    )
+  },
+  output_type = "both",
+  run = function(state, inputs, session, ns) {
+    state$current_view <- inputs$vis
+  },
+  plot = function(state) {
+    req(state$current_view)
+    obj <- get_result(state, state$current_view)
+    if (inherits(obj, "ggplot")) return(obj)
+    if (inherits(obj, "gseaResult")) {
+      return(GseaVis::dotplotGsea(data = obj, topn = 10, pajust = 0.25)$plot)
     }
-  ),
-
-  norm_table = list(
-    name = "标准化矩阵",
-    category = "表格查看",
-    params = NULL,
-    output_type = "table",
-    run = function(state, inputs, session, ns) NULL,
-    plot = function(state) {
-      req(state$data)
-      DT::datatable(state$data)
-    }
-  )
+    NULL   # 无图可展示时，图形区空白
+  },
+  table = function(state) {
+    req(state$current_view)
+    obj <- get_result(state, state$current_view)
+    if (is.null(obj)) return(DT::datatable(data.frame(提示 = "对象不存在")))
+    if (is.data.frame(obj)) return(DT::datatable(obj, options = list(scrollX = TRUE)))
+    if (is.matrix(obj) || inherits(obj, "Matrix")) return(DT::datatable(as.data.frame(as.matrix(obj))))
+    if (inherits(obj, "gseaResult")) return(DT::datatable(obj@result))
+    if (inherits(obj, "ggplot")) return(DT::datatable(obj$data))
+    info <- paste(capture.output(print(summary(obj))), collapse = "\n")
+    DT::datatable(data.frame(摘要 = info))
+  }
+)
 )
 
 # 分类配置 —— 控制 accordion 面板显示哪些工具

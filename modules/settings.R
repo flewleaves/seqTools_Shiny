@@ -17,13 +17,14 @@ settings_ui <- function(id) {
     card(
       card_header("分析参数"),
       selectInput(ns("set_norm"), "归一化", choices = c("log2", "log10", "None")),
+      numericInput(ns("set_seed"), "随机种子", value = 42),
       numericInput(ns("set_pval"), "p值阈值", value = 0.05, min = 0.001, step = 0.01),
-      numericInput(ns("set_logfc"), "logFC 阈值", value = 1, min = 0, max = 5, step = 0.1)
+      numericInput(ns("set_logfc"), "logFC 阈值", value = 1, min = 0, max = 5, step = 0.1),
+      selectInput(ns("set_dup"), "基因去重策略", choices = c("kmax", "max", "mean")),
     ),
     card(
       card_header("系统设置"),
-      textInput(ns("work_dir"), "工作目录", value = getwd()),
-      numericInput(ns("set_seed"), "随机种子", value = 42)
+      textInput(ns("work_dir"), "工作目录", value = getwd())
     ),
     col_widths = c(4, 4, 4)
   )
@@ -43,6 +44,7 @@ settings_server <- function(id, state) {
       updateTextInput(session, "ai_base_url", value = s$ai$base_url %||% "")
       updateTextInput(session, "work_dir", value = s$system$work_dir)
       updateSelectInput(session, "set_norm", selected = s$analysis$norm_method)
+      updateSelectInput(session, "set_dup", selected = s$analysis$dup)
       updateNumericInput(session, "set_pval", value = s$analysis$pval_cut)
       updateNumericInput(session, "set_logfc", value = s$analysis$logfc_cut)
       updateNumericInput(session, "set_seed", value = s$analysis$seed)
@@ -92,6 +94,7 @@ settings_server <- function(id, state) {
       input$set_norm
       input$set_pval
       input$set_logfc
+      input$set_dup
       input$set_seed
       input$work_dir
     }, {
@@ -106,7 +109,8 @@ settings_server <- function(id, state) {
           norm_method = input$set_norm,
           pval_cut = input$set_pval,
           logfc_cut = input$set_logfc,
-          seed = input$set_seed
+          seed = input$set_seed,
+          dup = input$set_dup
         ),
         system = list(
           work_dir = input$work_dir

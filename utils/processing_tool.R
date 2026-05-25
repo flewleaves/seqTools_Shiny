@@ -142,3 +142,9 @@ run_gsea <- function(state, inputs, session, ns){
           }
           
 }
+
+get_result <- function(state, name) {
+  if (name %in% names(state$res)) return(state$res[[name]])
+  if (name %in% names(state$data)) return(state$data[[name]])
+  NULL
+}

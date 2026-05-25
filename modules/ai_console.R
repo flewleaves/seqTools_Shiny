@@ -91,7 +91,11 @@ ai_console_ui <- function(id) {
         textAreaInput(ns("cmd"), NULL, placeholder = "Enter 发送，Shift+Enter 换行", 
                       rows = 2, resize = "vertical", width = "100%")
       ),
-      actionButton(ns("send"), "发送", class = "btn-primary btn-sm")
+      tags$div(
+        style = "display: flex; gap: 8px; margin-top: 8px;",
+        actionButton(ns("send"), "发送", class = "btn-primary btn-sm"),
+        uiOutput(ns("cancel_button_ui"))
+      )
     ),
     tags$script(HTML(sprintf("
       (function() {
@@ -160,19 +164,29 @@ freeze_rv <- function(x) {
 
 ai_console_server <- function(id, state) {
   moduleServer(id, function(input, output, session) {
+    ns <- session$ns
     
     is_processing <- reactiveVal(FALSE)
     has_message   <- reactiveVal(FALSE)
     ai_result     <- reactiveVal(NULL)
+    cancelled     <- reactiveVal(FALSE)
     
     output$thinking_indicator <- renderUI({
       if (!is_processing()) return(NULL)
       tags$div(
         style = "margin: 8px 0 8px 20px; color: #6c757d; font-style: italic;",
-        tags$span(class = "spinner-border spinner-border-sm", 
+        tags$span(class = "spinner-border spinner-border-sm",
                   style = "margin-right: 8px; width: 14px; height: 14px; border-width: 2px;"),
         "AI 正在思考..."
       )
+    })
+    
+    output$cancel_button_ui <- renderUI({
+      if (is_processing()) {
+        actionButton(ns("cancel_request"), "中断", class = "btn-warning btn-sm")
+      } else {
+        NULL
+      }
     })
     
     do_send <- function(cmd) {
@@ -180,17 +194,19 @@ ai_console_server <- function(id, state) {
       if (cmd == "") return()
       
       if (isolate(is_processing())) {
-        shinyalert::shinyalert("请稍候", "当前有一条请求正在处理中...", type = "warning", timer = 1500)
+        showNotification("当前有一条请求正在处理中...", type = "warning", duration = 3)
         return()
       }
       
+      cancelled(FALSE)
+      
       if (!isolate(has_message())) {
-        removeUI(selector = paste0("#", session$ns("chat_placeholder")), immediate = TRUE)
+        removeUI(selector = paste0("#", ns("chat_placeholder")), immediate = TRUE)
         has_message(TRUE)
       }
       
       insertUI(
-        selector = paste0("#", session$ns("chat_anchor")),
+        selector = paste0("#", ns("chat_anchor")),
         where = "beforeBegin",
         ui = tags$div(
           style = "margin: 4px 0;",
@@ -202,30 +218,49 @@ ai_console_server <- function(id, state) {
       
       updateTextAreaInput(session, "cmd", value = "")
       is_processing(TRUE)
-      session$sendCustomMessage("ai_scroll", list(id = session$ns("chat_box")))
+      session$sendCustomMessage("ai_scroll", list(id = ns("chat_box")))
       
       current_name  <- isolate(state$name) %||% "未命名"
-      current_mode  <- isolate(state$mode) %||% "bulk"
-      current_count <- isolate(state$count)
-      count_dim     <- ifelse(is.null(current_count), "未导入", paste(dim(current_count), collapse = "x"))
-      settings_list <- freeze_rv(isolate(state$settings))
+      current_mode  <- isolate(state$omics_type) %||% "bulk_rna"
+      count_dim <- if (length(isolate(state$data)) > 0) {
+        mat <- isolate(state$data[[1]])
+        if (!is.null(mat)) paste(dim(mat), collapse = "x") else "未导入"
+      } else "未导入"
       
       ctx <- paste(
         "当前分析状态:",
         sprintf("- 项目: %s", current_name),
-        sprintf("- 模式: %s", current_mode),
+        sprintf("- 组学: %s", current_mode),
         sprintf("- 数据: %s", count_dim),
         sep = "\n"
       )
       full_prompt <- paste(ctx, "\n\n用户问题:", cmd)
       
+      # 使用 later 将计算推迟，让 UI 有机会更新
       later::later(function() {
+        if (isolate(cancelled())) {
+          is_processing(FALSE)
+          return()
+        }
         tryCatch({
-          # 关键改动：传入 tools（全局变量）
-          result <- call_ai_with_tools(full_prompt, settings_list, state, tools, import_methods)
-          ai_result(list(type = "success", value = result))
+          result <- call_ai_with_tools(
+            prompt = full_prompt,
+            config = isolate(state$settings),
+            state  = state,
+            tools_list = tools,
+            import_methods_list = import_methods
+          )
+          if (!isolate(cancelled())) {
+            ai_result(list(type = "success", value = result))
+          } else {
+            is_processing(FALSE)
+          }
         }, error = function(e) {
-          ai_result(list(type = "error", value = conditionMessage(e)))
+          if (!isolate(cancelled())) {
+            ai_result(list(type = "error", value = conditionMessage(e)))
+          } else {
+            is_processing(FALSE)
+          }
         })
       }, delay = 0)
     }
@@ -236,31 +271,43 @@ ai_console_server <- function(id, state) {
       
       if (res$type == "success") {
         insertUI(
-          selector = paste0("#", session$ns("chat_anchor")),
+          selector = paste0("#", ns("chat_anchor")),
           where = "beforeBegin",
           ui = tags$div(
             class = "ai-markdown",
             style = "background: #fff; border: 1px solid #dee2e6; padding: 8px 12px; margin: 4px 0 4px 20px; border-radius: 8px; color: #333;",
-            HTML(shiny::markdown(res$value))   # <-- 两处改动之一：HTML() 包裹
+            HTML(shiny::markdown(res$value))
           ),
           immediate = TRUE
         )
       } else {
         insertUI(
-          selector = paste0("#", session$ns("chat_anchor")),
+          selector = paste0("#", ns("chat_anchor")),
           where = "beforeBegin",
           ui = tags$div(
             style = "color: #dc3545; margin: 4px 0 4px 20px;",
-            HTML(paste0("[ERR] ", res$value))   # <-- 两处改动之二：HTML() 包裹
+            HTML(paste0("[ERR] ", res$value))
           ),
           immediate = TRUE
         )
       }
       
-      session$sendCustomMessage("ai_scroll", list(id = session$ns("chat_box")))
+      session$sendCustomMessage("ai_scroll", list(id = ns("chat_box")))
       is_processing(FALSE)
       ai_result(NULL)
     }, ignoreInit = TRUE)
+    
+    observeEvent(input$cancel_request, {
+      cancelled(TRUE)
+      is_processing(FALSE)
+      insertUI(
+        selector = paste0("#", ns("chat_anchor")),
+        where = "beforeBegin",
+        ui = tags$div(style = "color: #6c757d; font-style: italic;", "[用户已中断当前请求]"),
+        immediate = TRUE
+      )
+      session$sendCustomMessage("ai_scroll", list(id = ns("chat_box")))
+    })
     
     observeEvent(input$cmd_submit, {
       do_send(isolate(input$cmd_submit))

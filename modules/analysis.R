@@ -1,13 +1,3 @@
-analysis_ui <- function(id) {
-  ns <- NS(id)
-  tagList(
-    # 动态生成工具面板（替换原来静态的 accordion）
-    uiOutput(ns("toolbar")),
-    hr(),
-    uiOutput(ns("result_area"))
-  )
-}
-
 analysis_server <- function(id, state) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -19,7 +9,6 @@ analysis_server <- function(id, state) {
         return(div(class = "text-center p-5", h4("请先在数据模块中导入数据并确认组学类型")))
       }
       
-      # 辅助函数：从工具 ID 生成按钮
       make_tool_panel <- function(tool_ids) {
         buttons <- lapply(tool_ids, function(tid) {
           if (tid %in% names(tools)) {
@@ -30,7 +19,6 @@ analysis_server <- function(id, state) {
         do.call(tagList, buttons)
       }
       
-      # 过滤工具：保留通用工具或匹配当前组学类型的工具
       omics_type <- state$omics_type
       panels <- lapply(names(tool_categories), function(cat) {
         tool_ids <- tool_categories[[cat]]
@@ -44,7 +32,6 @@ analysis_server <- function(id, state) {
           NULL
         }
       })
-      # 移除空分类
       panels <- Filter(Negate(is.null), panels)
       
       accordion(
@@ -54,46 +41,40 @@ analysis_server <- function(id, state) {
       )
     })
 
-    # ---------- 核心运行函数（完全不变） ----------
+    # ---------- 核心运行函数 ----------
     run_tool <- function(tid, inputs) {
       tool <- tools[[tid]]
       
-      # 1. 立即用 JS 隐藏结果区并显示“分析中”提示
-      #    因为 Shiny 单线程，这一步会在浏览器立即生效
       shinyjs::runjs(sprintf("
         var resultDiv = document.getElementById('%s');
         if(resultDiv) {
           resultDiv.innerHTML = '<div class=\"text-center p-5\"><h3>分析中，请稍候...</h3></div>';
         }
-      ", ns("result_area")))   # 注意：结果区必须有一个 id 为 ns("result_area") 的容器
+      ", ns("result_area")))
       
-      # 2. 清空当前工具标记，防止旧输出残留
       current_tool(NULL)
-      
-      # 3. 执行工具计算（期间浏览器保持“分析中”）
       nid <- showNotification(paste("正在运行", tool$name, "..."), type = "message", duration = NULL)
       
       tryCatch({
         if (!is.null(tool$run)) {
           tool$run(state, inputs, session, ns)
         }
-        current_tool(tid)   # 成功后标记当前工具
+        current_tool(tid)
         removeNotification(nid)
         showNotification(paste(tool$name, "完成"), type = "message")
       }, error = function(e) {
         removeNotification(nid)
         showNotification(paste("运行失败:", e$message), type = "error", duration = NULL)
-        current_tool(NULL)  # 失败时保持无工具状态
+        current_tool(NULL)
       })
-      # tryCatch 结束后，current_tool(tid) 会触发正常的 renderUI 恢复界面
     }
 
-    # ---------- 按钮绑定（完全不变） ----------
+    # ---------- 按钮绑定 ----------
     lapply(names(tools), function(tid) {
       observeEvent(input[[paste0("run_", tid)]], {
         tool <- tools[[tid]]
         if (!is.null(tool$params)) {
-          param_data <- tool$params(ns,state)
+          param_data <- tool$params(ns, state)
           showModal(modalDialog(
             title = paste("设置参数 -", tool$name),
             param_data$ui,
@@ -108,13 +89,13 @@ analysis_server <- function(id, state) {
       })
     })
 
-    # ---------- 确认/取消绑定（完全不变） ----------
+    # ---------- 确认/取消绑定 ----------
     lapply(names(tools), function(tid) {
       tool <- tools[[tid]]
       if (!is.null(tool$params)) {
         observeEvent(input[[paste0("cancel_", tid)]], removeModal())
         observeEvent(input[[paste0("confirm_", tid)]], {
-          param_data <- tool$params(ns,state)
+          param_data <- tool$params(ns, state)
           ids <- param_data$ids
           inputs_list <- setNames(lapply(ids, function(p) input[[p]]), ids)
           removeModal()
@@ -123,7 +104,6 @@ analysis_server <- function(id, state) {
       }
     })
 
-    # ---------- 动态输出区域（完全不变） ----------
     # ---------- 动态输出区域 ----------
     output$result_area <- renderUI({
       if (is.null(current_tool())) {
@@ -131,26 +111,46 @@ analysis_server <- function(id, state) {
       }
       tool <- tools[[current_tool()]]
       type <- tool$output_type
-      
+
+      save_plot_btn <- actionButton(ns("save_plot_dialog"), "保存图片 (PDF)", 
+                                    icon = icon("download"), class = "btn-success btn-sm")
+      save_table_btn <- downloadButton(ns("download_table"), "保存表格 (CSV)", 
+                                       class = "btn-success btn-sm")
+
       if (type == "plot") {
+        tagList(
+          save_plot_btn,
           plotOutput(ns("result_plot"), height = "500px")
-        } else if (type == "table") {
+        )
+      } else if (type == "table") {
+        tagList(
+          save_table_btn,
           DT::dataTableOutput(ns("result_table"))
-        } else if (type == "both") {
-          tabsetPanel(
-            tabPanel("图形", plotOutput(ns("result_plot"), height = "500px")),
-            tabPanel("表格", DT::dataTableOutput(ns("result_table")))
+        )
+      } else if (type == "both") {
+        tabsetPanel(
+          tabPanel("图形",
+            tagList(
+              save_plot_btn,
+              plotOutput(ns("result_plot"), height = "500px")
+            )
+          ),
+          tabPanel("表格",
+            tagList(
+              save_table_btn,
+              DT::dataTableOutput(ns("result_table"))
+            )
           )
-        } else {
-          p("此工具无可视化输出")
-        }
+        )
+      } else {
+        p("此工具无可视化输出")
+      }
     })
 
     # ---------- 渲染函数 ----------
     output$result_plot <- renderPlot({
       req(current_tool())
       tool <- tools[[current_tool()]]
-      # 只有 output_type 为 "plot" 或 "both" 时才有图形
       req(tool$plot)
       tool$plot(state)
     })
@@ -158,9 +158,55 @@ analysis_server <- function(id, state) {
     output$result_table <- DT::renderDataTable({
       req(current_tool())
       tool <- tools[[current_tool()]]
-      # 只有 output_type 为 "table" 或 "both" 时才有表格
       req(tool$table)
       tool$table(state)
     })
-  })
-}
+
+    # ---------- 图片下载（通过模态框中的下载按钮） ----------
+    output$download_plot_modal <- downloadHandler(
+      filename = function() {
+        tool <- tools[[current_tool()]]
+        paste0(tool$name, "_", Sys.Date(), ".pdf")
+      },
+      content = function(file) {
+        tool <- tools[[current_tool()]]
+        p <- tool$plot(state)
+        w <- input$plot_width %||% 10
+        h <- input$plot_height %||% 6
+        ggplot2::ggsave(file, plot = p, device = "pdf", width = w, height = h)
+      }
+    )
+
+    # ---------- 表格下载 ----------
+    output$download_table <- downloadHandler(
+      filename = function() {
+        tool <- tools[[current_tool()]]
+        paste0(tool$name, "_", Sys.Date(), ".csv")
+      },
+      content = function(file) {
+        tool <- tools[[current_tool()]]
+        tab <- tool$table(state)
+        if (inherits(tab, "datatables")) {
+          write.csv(tab$x$data, file, row.names = FALSE)
+        } else if (is.data.frame(tab)) {
+          write.csv(tab, file, row.names = FALSE)
+        }
+      }
+    )
+
+    # ---------- 点击“保存图片”按钮 → 弹出尺寸设置对话框 ----------
+    observeEvent(input$save_plot_dialog, {
+      showModal(modalDialog(
+        title = "设置图片尺寸",
+        numericInput(ns("plot_width"), "宽度 (英寸)", value = 10, min = 3, max = 20, step = 0.5),
+        numericInput(ns("plot_height"), "高度 (英寸)", value = 6, min = 3, max = 20, step = 0.5),
+        footer = tagList(
+          downloadButton(ns("download_plot_modal"), "下载 PDF", class = "btn-primary"),
+          modalButton("取消")
+        ),
+        easyClose = TRUE
+      ))
+    })
+
+  }) # 结束 moduleServer 内部的函数
+} # 结束 analysis_server 函数

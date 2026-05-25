@@ -345,7 +345,9 @@ call_ai_with_tools <- function(prompt, config, state, tools_list, import_methods
     stop("不支持的提供商: ", provider)
   )
   
-  tools <- create_project_tools(state, tools_list, import_methods_list)
+    tools <- create_project_tools(state, tools_list, import_methods_list)
+  
+  steps <- character()  # 收集每一步的文本
   
   system_prompt <- paste(
     "你是一个生物信息学分析助手。你可以访问用户的项目数据并执行分析。",
@@ -369,18 +371,42 @@ call_ai_with_tools <- function(prompt, config, state, tools_list, import_methods
     "2. 调用 list_tools / get_tool_params 后，输出'📋 已获取工具参数'",
     "3. 调用 run_tool 后，输出'⚙️ 正在执行...'",
     "4. 调用 get_analysis_result 后，输出'✅ 分析完成，结果如下'",
-    "5. 如果接近步数上限，输出'⚠️ 步骤较多，建议分步执行'",,
+    "5. 如果接近步数上限，输出'⚠️ 步骤较多，建议分步执行'",
+    "【结果展示规范 - 必须遵守】：",
+    "1. 分析完成后，先用 1-2 句话概括结果（如上调/下调基因数、关键发现）",
+    "2. 必须明确告知用户查看位置：",
+    "   - 差异分析/富集分析/绘图结果 → '📊 完整结果请前往【分析】模块查看'",
+    "   - 导入的数据矩阵 → '📁 数据已导入，请前往【数据预处理】模块预览和确认'",
+    "   - 项目文件 → '💾 项目已保存，请前往【项目管理】模块查看'",
+    "3. 如需展示预览，调用 get_analysis_result 获取前10行，用 Markdown 表格展示",
+    "4. 绝不声称'没有结果'或'结果未生成'，只要 run_tool 返回 success，结果就在 state$res 中",
     sep = "\n"
   )
-  
+
+  # 流式调用，通过回调追加步骤
   result <- aisdk::generate_text(
     model = model,
     prompt = prompt,
     system = system_prompt,
     tools = tools,
     max_steps = 100,
-    temperature = 0.2
+    temperature = 0.2,
+    stream = TRUE,
+    on_chunk = function(chunk) {
+      # 每个 chunk 可能是文本或工具调用请求
+      if (!is.null(chunk$tool_call)) {
+        # 记录工具调用
+        step_msg <- paste0("🔧 正在调用工具: ", chunk$tool_call$name, "(", 
+                          jsonlite::toJSON(chunk$tool_call$arguments), ")")
+        steps <<- c(steps, step_msg)
+      } else if (!is.null(chunk$text)) {
+        steps <<- c(steps, chunk$text)
+      }
+    }
   )
+  
+  # 将步骤合并为最终显示
+  paste(steps, collapse = "\n\n")
   
   if (!is.null(result$finish_reason) && result$finish_reason == "max_steps") {
     return(paste0(
