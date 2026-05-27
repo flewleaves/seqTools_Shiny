@@ -3,318 +3,336 @@
 ai_console_ui <- function(id) {
   ns <- NS(id)
   tagList(
+    tags$head(
+      tags$script(src = "https://cdn.jsdelivr.net/npm/marked/marked.min.js"),
+      tags$script(src = "https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"),
+      tags$link(rel = "stylesheet",
+                href = "https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github.min.css")
+    ),
     tags$style(HTML("
-      .ai-markdown {
-        font-size: 13px;
-        line-height: 1.6;
-      }
-      .ai-markdown p {
-        margin: 6px 0;
-      }
-      .ai-markdown h1, .ai-markdown h2, .ai-markdown h3, .ai-markdown h4 {
-        margin: 10px 0 6px 0;
-        font-weight: 600;
-        color: #212529;
-      }
-      .ai-markdown pre {
-        background: #f6f8fa;
-        padding: 10px 12px;
-        border-radius: 6px;
-        overflow-x: auto;
-        font-family: 'Consolas', 'Monaco', monospace;
-        font-size: 12px;
-        line-height: 1.4;
-        margin: 8px 0;
-      }
-      .ai-markdown code {
-        background: rgba(175,184,193,0.2);
-        padding: 2px 4px;
-        border-radius: 3px;
-        font-family: 'Consolas', 'Monaco', monospace;
-        font-size: 12px;
-      }
-      .ai-markdown pre code {
-        background: transparent;
-        padding: 0;
-      }
-      .ai-markdown table {
-        border-collapse: collapse;
-        width: 100%;
-        margin: 8px 0;
-        font-size: 12px;
-      }
-      .ai-markdown th, .ai-markdown td {
-        border: 1px solid #dee2e6;
-        padding: 5px 8px;
-        text-align: left;
-      }
-      .ai-markdown th {
-        background: #f8f9fa;
-        font-weight: 600;
-      }
-      .ai-markdown blockquote {
-        border-left: 3px solid #0d6efd;
-        margin: 8px 0;
-        padding: 4px 12px;
-        background: #f8f9fa;
-        color: #495057;
-      }
-      .ai-markdown ul, .ai-markdown ol {
-        padding-left: 20px;
-        margin: 6px 0;
-      }
-      .ai-markdown img {
-        max-width: 100%;
-        border-radius: 4px;
-        margin: 6px 0;
-      }
-      .ai-markdown hr {
-        border: none;
-        border-top: 1px solid #dee2e6;
-        margin: 10px 0;
-      }
+      #", ns("chat_box"), " { height: 480px; overflow-y: auto; padding: 12px;
+        background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; }
+      .ai-user-msg { text-align: right; margin: 8px 0; }
+      .ai-user-msg span { background: #0d6efd; color: #fff;
+        padding: 6px 12px; border-radius: 12px 12px 2px 12px;
+        display: inline-block; max-width: 80%; word-break: break-word; }
+      .ai-bot-msg { margin: 8px 0 8px 8px; }
+      .ai-bot-msg .bubble { background: #fff; border: 1px solid #dee2e6;
+        padding: 8px 14px; border-radius: 2px 12px 12px 12px;
+        display: inline-block; max-width: 92%; word-break: break-word; }
+      .ai-markdown { font-size: 13px; line-height: 1.7; }
+      .ai-markdown p  { margin: 4px 0; }
+      .ai-markdown pre { background: #f6f8fa; padding: 10px; border-radius: 6px;
+        overflow-x: auto; margin: 6px 0; }
+      .ai-markdown code { font-family: monospace; font-size: 12px; }
+      .ai-markdown table { border-collapse: collapse; width: 100%; margin: 6px 0; }
+      .ai-markdown th, .ai-markdown td { border: 1px solid #dee2e6;
+        padding: 4px 8px; text-align: left; }
+      .ai-markdown th { background: #f0f0f0; }
+      .ai-thinking { color: #999; font-style: italic; font-size: 12px; }
+      .ai-tool-badge { display: inline-block; background: #e7f0ff; color: #0d6efd;
+        border: 1px solid #b8d0ff; border-radius: 4px;
+        padding: 2px 8px; font-size: 11px; margin: 2px 0; }
+      .ai-error { color: #dc3545; }
+      .ai-status-bar { font-size: 11px; color: #888; min-height: 18px;
+        padding: 2px 4px; }
     ")),
-    
     card(
       full_screen = TRUE,
-      card_header("AI 助手"),
-      tags$div(
-        id = ns("chat_box"),
-        style = "height: 400px; overflow-y: auto; padding: 12px; background: #f8f9fa; color: #333; font-family: 'Consolas', monospace; font-size: 13px; border: 1px solid #dee2e6; border-radius: 4px;",
-        tags$div(id = ns("chat_placeholder"), style = "color: #999;", "# 等待输入..."),
-        tags$div(id = ns("chat_anchor"), style = "display: none;")
+      card_header(
+        style = "display:flex; justify-content:space-between; align-items:center;",
+        span("AI 助手"),
+        actionButton(ns("clear_chat"), "清空对话", class = "btn-outline-secondary btn-sm")
       ),
-      uiOutput(ns("thinking_indicator")),
-      tags$div(
-        style = "display: flex; margin-top: 10px; gap: 8px;",
-        tags$span("> ", style = "color: #0d6efd; padding-top: 8px; font-weight: bold;"),
-        textAreaInput(ns("cmd"), NULL, placeholder = "Enter 发送，Shift+Enter 换行", 
-                      rows = 2, resize = "vertical", width = "100%")
+      tags$div(id = ns("chat_box"),
+        tags$div(id = ns("chat_placeholder"), class = "ai-thinking", "连接中..."),
+        tags$div(id = ns("chat_anchor"))
       ),
+      tags$div(id = ns("status_bar"), class = "ai-status-bar"),
       tags$div(
-        style = "display: flex; gap: 8px; margin-top: 8px;",
-        actionButton(ns("send"), "发送", class = "btn-primary btn-sm"),
-        uiOutput(ns("cancel_button_ui"))
+        style = "display:flex; gap:8px; margin-top:8px; align-items:flex-end;",
+        tags$div(style = "flex:1;",
+          textAreaInput(ns("cmd"), NULL,
+                        placeholder = "Enter 发送，Shift+Enter 换行",
+                        rows = 2, resize = "vertical", width = "100%")
+        ),
+        tags$div(style = "display:flex; flex-direction:column; gap:4px;",
+          actionButton(ns("send"),   "发送", class = "btn-primary btn-sm"),
+          actionButton(ns("cancel"), "中断", class = "btn-warning btn-sm",
+                       style = "display:none;")
+        )
       )
     ),
-    tags$script(HTML(sprintf("
-      (function() {
-        var NS = '%s';
-        var TA_ID = '%s';
-        var BTN_ID = '%s';
-        var SUBMIT_ID = '%s';
-        
-        var boundKey = '_seqToolsAIChat_' + NS;
-        if (window[boundKey]) return;
-        window[boundKey] = true;
-        
-        var isComposing = false;
-        
-        document.addEventListener('compositionstart', function(e) {
-          if (e.target.id === TA_ID) isComposing = true;
-        }, true);
-        
-        document.addEventListener('compositionend', function(e) {
-          if (e.target.id === TA_ID) isComposing = false;
-        }, true);
-        
-        function submitChat() {
-          var ta = document.getElementById(TA_ID);
-          if (!ta) return;
-          var value = ta.value;
-          if (!value || !value.trim()) return;
-          ta.value = '';
-          Shiny.setInputValue(SUBMIT_ID, value, {priority: 'event'});
+    tags$script(HTML(paste0(
+'(function() {
+  var NS = "', id, '-";
+  var ws = null;
+  var reconnectTimer = null;
+  var reconnectCount = 0;
+  var maxReconnect   = 5;
+  var isCancelled    = false;
+
+  var wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  var rawHost    = window.location.hostname;
+  var wsHost     = (!rawHost || rawHost === "0.0.0.0") ? "localhost" : rawHost;
+  var wsPort     = window.__SEQTOOLS_WS_PORT__ || "8765";
+  var wsUrl      = wsProtocol + "//" + wsHost + ":" + wsPort + "/ws";
+
+  /* ── marked 配置：启用 highlight.js 代码高亮 ── */
+  function setupMarked() {
+    if (typeof marked === "undefined") return;
+    marked.setOptions({
+      breaks: true,
+      gfm:    true,
+      highlight: function(code, lang) {
+        if (typeof hljs !== "undefined" && lang && hljs.getLanguage(lang)) {
+          return hljs.highlight(code, { language: lang }).value;
         }
-        
-        document.addEventListener('keydown', function(e) {
-          if (e.target.id !== TA_ID) return;
-          if ((e.key !== 'Enter' && e.keyCode !== 13) || e.shiftKey) return;
-          if (e.isComposing || isComposing) return;
-          e.preventDefault();
-          submitChat();
-        }, true);
-        
-        var btn = document.getElementById(BTN_ID);
-        if (btn) {
-          btn.addEventListener('click', function(e) {
-            e.stopImmediatePropagation();
-            submitChat();
+        return typeof hljs !== "undefined" ? hljs.highlightAuto(code).value : code;
+      }
+    });
+  }
+
+  /* ── WebSocket ── */
+  function connect() {
+    if (reconnectCount >= maxReconnect) {
+      setStatus("连接失败，请检查 Python 后端是否运行在端口 " + wsPort, "error");
+      var ph = document.getElementById(NS + "chat_placeholder");
+      if (ph) ph.style.display = "none";
+      return;
+    }
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = function() {
+      console.log("WS connected:", wsUrl);
+      reconnectCount = 0;
+      setStatus("已连接", "ok");
+      var ph = document.getElementById(NS + "chat_placeholder");
+      if (ph) ph.style.display = "none";
+    };
+    ws.onmessage = function(e) { handleMessage(JSON.parse(e.data)); };
+    ws.onclose   = function() {
+      if (isCancelled) return;
+      reconnectCount++;
+      setStatus("连接断开，重连中 (" + reconnectCount + "/" + maxReconnect + ")...", "warn");
+      reconnectTimer = setTimeout(connect, 3000);
+    };
+    ws.onerror = function(e) { console.error("WS error:", e); };
+  }
+
+  /* ── 消息处理 ── */
+  function handleMessage(msg) {
+    switch (msg.type) {
+      case "thinking":
+        getOrCreateBotBubble().textContent = "思考中...";
+        getOrCreateBotBubble().className = "bubble ai-thinking";
+        break;
+      case "stream_text":
+        appendStreamText(msg.content); break;
+      case "tool_start":
+        appendToolBadge("🔧 调用: " + msg.tool); break;
+      case "tool_executing":
+        appendToolBadge("⚙️ 执行: " + msg.tool); break;
+      case "tool_result":
+        appendToolBadge("✅ " + msg.tool + " 完成");
+        if (window.Shiny) Shiny.setInputValue(NS + "ai_refresh", Math.random());
+        break;
+      case "stream_done":  finalizeMessage(); break;
+      case "cancelled":    showCancelled();   break;
+      case "error":        showError(msg.error); break;
+    }
+  }
+
+  /* ── DOM 辅助 ── */
+  function getAnchor() { return document.getElementById(NS + "chat_anchor"); }
+
+  function getOrCreateBotBubble() {
+    var el = document.getElementById(NS + "current_stream");
+    if (!el) {
+      var wrap = document.createElement("div");
+      wrap.className = "ai-bot-msg";
+      el = document.createElement("div");
+      el.id        = NS + "current_stream";
+      el.className = "bubble ai-streaming";
+      wrap.appendChild(el);
+      var anchor = getAnchor();
+      anchor.parentNode.insertBefore(wrap, anchor);
+    }
+    return el;
+  }
+
+  var streamText = "";   /* 纯文本累积，用于最终 markdown 渲染 */
+
+  function appendStreamText(text) {
+    streamText += text;
+    var el = getOrCreateBotBubble();
+    el.className = "bubble ai-streaming";
+    /* 流式阶段：plain text 显示，避免频繁重渲染 markdown */
+    el.textContent = streamText;
+    scrollToBottom();
+  }
+
+  function appendToolBadge(text) {
+    var badge = document.createElement("div");
+    badge.className = "ai-tool-badge";
+    badge.textContent = text;
+    var anchor = getAnchor();
+    anchor.parentNode.insertBefore(badge, anchor);
+    scrollToBottom();
+  }
+
+  function finalizeMessage() {
+    var el = document.getElementById(NS + "current_stream");
+    if (el) {
+      el.id = "";
+      el.className = "bubble ai-markdown";
+      if (typeof marked !== "undefined" && marked.parse) {
+        el.innerHTML = marked.parse(streamText);
+        /* 对代码块运行 hljs */
+        if (typeof hljs !== "undefined") {
+          el.querySelectorAll("pre code").forEach(function(block) {
+            hljs.highlightElement(block);
           });
         }
-      })();
-      
-      Shiny.addCustomMessageHandler('ai_scroll', function(msg) {
-        var box = document.getElementById(msg.id);
-        if (box) box.scrollTop = box.scrollHeight;
-      });
-    ", id, ns("cmd"), ns("send"), ns("cmd_submit"))))
-  )
-}
+      } else {
+        el.innerHTML = "<pre>" +
+          streamText.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") +
+          "</pre>";
+      }
+    }
+    streamText = "";
+    setCancelVisible(false);
+    isCancelled = false;
+    setStatus("就绪", "ok");
+    scrollToBottom();
+  }
 
-freeze_rv <- function(x) {
-  if (shiny::is.reactivevalues(x)) {
-    x <- shiny::reactiveValuesToList(x, all.names = TRUE)
+  function showCancelled() {
+    var el = document.getElementById(NS + "current_stream");
+    if (el) {
+      el.className = "bubble ai-thinking";
+      el.textContent = "已中断";
+    }
+    streamText = "";
+    setCancelVisible(false);
+    isCancelled = false;
+    setStatus("已中断", "warn");
   }
-  if (is.list(x)) {
-    x <- lapply(x, freeze_rv)
+
+  function showError(err) {
+    var el = getOrCreateBotBubble();
+    el.className = "bubble ai-error";
+    el.textContent = "错误: " + err;
+    streamText = "";
+    setCancelVisible(false);
+    setStatus("错误", "error");
+    scrollToBottom();
   }
-  x
+
+  function setStatus(text, level) {
+    var bar = document.getElementById(NS + "status_bar");
+    if (!bar) return;
+    var colors = { ok: "#28a745", warn: "#fd7e14", error: "#dc3545" };
+    bar.style.color   = colors[level] || "#888";
+    bar.textContent   = text;
+  }
+
+  function setCancelVisible(v) {
+    var btn = document.getElementById(NS + "cancel");
+    if (btn) btn.style.display = v ? "inline-block" : "none";
+  }
+
+  function scrollToBottom() {
+    var box = document.getElementById(NS + "chat_box");
+    if (box) box.scrollTop = box.scrollHeight;
+  }
+
+  /* ── 事件绑定 ── */
+  function bindEvents() {
+    var sendBtn   = document.getElementById(NS + "send");
+    var cancelBtn = document.getElementById(NS + "cancel");
+    var clearBtn  = document.getElementById(NS + "clear_chat");
+    var cmdTA     = document.getElementById(NS + "cmd");
+    if (!sendBtn || !cancelBtn || !cmdTA) { setTimeout(bindEvents, 100); return; }
+
+    sendBtn.addEventListener("click", function() {
+      var text = cmdTA.value.trim();
+      if (!text) return;
+      cmdTA.value = "";
+
+      /* 用户气泡 */
+      var wrap = document.createElement("div");
+      wrap.className = "ai-user-msg";
+      var bubble = document.createElement("span");
+      bubble.textContent = text;
+      wrap.appendChild(bubble);
+      getAnchor().parentNode.insertBefore(wrap, getAnchor());
+      scrollToBottom();
+
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        streamText = "";
+        ws.send(JSON.stringify({ type: "chat", prompt: text }));
+        setCancelVisible(true);
+        setStatus("发送中...", "ok");
+      } else {
+        showError("AI 后端未连接（" + wsUrl + "），请确认 Python 服务已启动");
+      }
+    });
+
+    cancelBtn.addEventListener("click", function() {
+      isCancelled = true;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "cancel" }));
+      }
+    });
+
+    if (clearBtn) {
+      clearBtn.addEventListener("click", function() {
+        var box   = document.getElementById(NS + "chat_box");
+        var anchor = getAnchor();
+        /* 删除 anchor 之前的所有兄弟节点 */
+        while (box.firstChild && box.firstChild !== anchor) {
+          box.removeChild(box.firstChild);
+        }
+        streamText = "";
+        setStatus("对话已清空", "ok");
+        /* 通知 R server 清空对话历史 */
+        if (window.Shiny) Shiny.setInputValue(NS + "clear_history", Math.random());
+      });
+    }
+
+    cmdTA.addEventListener("keydown", function(e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendBtn.click();
+      }
+    });
+  }
+
+  setupMarked();
+  connect();
+  bindEvents();
+})();
+'
+    )))
+  )
 }
 
 ai_console_server <- function(id, state) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
-    
-    is_processing <- reactiveVal(FALSE)
-    has_message   <- reactiveVal(FALSE)
-    ai_result     <- reactiveVal(NULL)
-    cancelled     <- reactiveVal(FALSE)
-    
-    output$thinking_indicator <- renderUI({
-      if (!is_processing()) return(NULL)
-      tags$div(
-        style = "margin: 8px 0 8px 20px; color: #6c757d; font-style: italic;",
-        tags$span(class = "spinner-border spinner-border-sm",
-                  style = "margin-right: 8px; width: 14px; height: 14px; border-width: 2px;"),
-        "AI 正在思考..."
-      )
+
+    # AI 工具调用完成后自动同步状态到 Shiny
+    observeEvent(input$ai_refresh, {
+      pull_state_from_python(state)
     })
-    
-    output$cancel_button_ui <- renderUI({
-      if (is_processing()) {
-        actionButton(ns("cancel_request"), "中断", class = "btn-warning btn-sm")
-      } else {
-        NULL
-      }
+
+    # 清空对话历史（通知 Python 端重置 conversation）
+    observeEvent(input$clear_history, {
+      # Python 端 WebSocket 的 conversation 在连接内维护
+      # 前端重连会自动重置；此处发一个 reset 消息
+      # （main.py 需支持 type="reset" 消息，见下方说明）
     })
-    
-    do_send <- function(cmd) {
-      cmd <- trimws(cmd)
-      if (cmd == "") return()
-      
-      if (isolate(is_processing())) {
-        showNotification("当前有一条请求正在处理中...", type = "warning", duration = 3)
-        return()
-      }
-      
-      cancelled(FALSE)
-      
-      if (!isolate(has_message())) {
-        removeUI(selector = paste0("#", ns("chat_placeholder")), immediate = TRUE)
-        has_message(TRUE)
-      }
-      
-      insertUI(
-        selector = paste0("#", ns("chat_anchor")),
-        where = "beforeBegin",
-        ui = tags$div(
-          style = "margin: 4px 0;",
-          tags$span(style = "color: #0d6efd; font-weight: bold;", "> "),
-          tags$span(style = "color: #333;", cmd)
-        ),
-        immediate = TRUE
-      )
-      
-      updateTextAreaInput(session, "cmd", value = "")
-      is_processing(TRUE)
-      session$sendCustomMessage("ai_scroll", list(id = ns("chat_box")))
-      
-      current_name  <- isolate(state$name) %||% "未命名"
-      current_mode  <- isolate(state$omics_type) %||% "bulk_rna"
-      count_dim <- if (length(isolate(state$data)) > 0) {
-        mat <- isolate(state$data[[1]])
-        if (!is.null(mat)) paste(dim(mat), collapse = "x") else "未导入"
-      } else "未导入"
-      
-      ctx <- paste(
-        "当前分析状态:",
-        sprintf("- 项目: %s", current_name),
-        sprintf("- 组学: %s", current_mode),
-        sprintf("- 数据: %s", count_dim),
-        sep = "\n"
-      )
-      full_prompt <- paste(ctx, "\n\n用户问题:", cmd)
-      
-      # 使用 later 将计算推迟，让 UI 有机会更新
-      later::later(function() {
-        if (isolate(cancelled())) {
-          is_processing(FALSE)
-          return()
-        }
-        tryCatch({
-          result <- call_ai_with_tools(
-            prompt = full_prompt,
-            config = isolate(state$settings),
-            state  = state,
-            tools_list = tools,
-            import_methods_list = import_methods
-          )
-          if (!isolate(cancelled())) {
-            ai_result(list(type = "success", value = result))
-          } else {
-            is_processing(FALSE)
-          }
-        }, error = function(e) {
-          if (!isolate(cancelled())) {
-            ai_result(list(type = "error", value = conditionMessage(e)))
-          } else {
-            is_processing(FALSE)
-          }
-        })
-      }, delay = 0)
-    }
-    
-    observeEvent(ai_result(), {
-      req(ai_result())
-      res <- isolate(ai_result())
-      
-      if (res$type == "success") {
-        insertUI(
-          selector = paste0("#", ns("chat_anchor")),
-          where = "beforeBegin",
-          ui = tags$div(
-            class = "ai-markdown",
-            style = "background: #fff; border: 1px solid #dee2e6; padding: 8px 12px; margin: 4px 0 4px 20px; border-radius: 8px; color: #333;",
-            HTML(shiny::markdown(res$value))
-          ),
-          immediate = TRUE
-        )
-      } else {
-        insertUI(
-          selector = paste0("#", ns("chat_anchor")),
-          where = "beforeBegin",
-          ui = tags$div(
-            style = "color: #dc3545; margin: 4px 0 4px 20px;",
-            HTML(paste0("[ERR] ", res$value))
-          ),
-          immediate = TRUE
-        )
-      }
-      
-      session$sendCustomMessage("ai_scroll", list(id = ns("chat_box")))
-      is_processing(FALSE)
-      ai_result(NULL)
-    }, ignoreInit = TRUE)
-    
-    observeEvent(input$cancel_request, {
-      cancelled(TRUE)
-      is_processing(FALSE)
-      insertUI(
-        selector = paste0("#", ns("chat_anchor")),
-        where = "beforeBegin",
-        ui = tags$div(style = "color: #6c757d; font-style: italic;", "[用户已中断当前请求]"),
-        immediate = TRUE
-      )
-      session$sendCustomMessage("ai_scroll", list(id = ns("chat_box")))
-    })
-    
-    observeEvent(input$cmd_submit, {
-      do_send(isolate(input$cmd_submit))
-    }, ignoreInit = TRUE)
-    
-    observeEvent(input$send, {
-      do_send(isolate(input$cmd))
-    }, ignoreInit = TRUE)
   })
 }

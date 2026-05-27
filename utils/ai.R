@@ -1,319 +1,257 @@
 # utils/ai.R
+# 适配新架构：直接操作全局 engine$project (R6)
 
-# ==================== 原有 call_ai 保留 ====================
+`%||%` <- function(x, y) if (is.null(x)) y else x
 
-call_ai <- function(prompt, config) {
-  provider <- config$ai$provider
-  key <- config$ai$key
-  model_id <- config$ai$model
-  base_url <- config$ai$base_url
-  
-  if (is.null(key) || key == "") stop("API Key 未设置")
-  
-  model <- switch(provider,
-    "openai" = {
-      if (!is.null(base_url) && base_url != "") {
-        openai$language_model(model_id, api_key = key, base_url = base_url)
-      } else {
-        openai$language_model(model_id, api_key = key)
-      }
-    },
-    "deepseek" = create_deepseek(api_key = key)$language_model(model_id),
-    "aliyun"   = create_aliyun(api_key = key)$language_model(model_id),
-    "custom"   = openai$language_model(model_id, api_key = key, base_url = base_url),
-    stop("不支持的提供商: ", provider)
-  )
-  
-  generate_text(model, prompt)$text
-}
-
-# ==================== 新增：对接 tools 注册表 + import_methods 的 AI 工具 ====================
-
-#' 创建 mock session（供 tool$run 使用）
-create_mock_session <- function() {
-  s <- list(
-    sendCustomMessage = function(...) NULL,
-    sendInputMessage = function(...) NULL,
-    sendInsertUI = function(...) NULL,
-    sendRemoveUI = function(...) NULL,
-    registerDataObj = function(...) NULL,
-    ns = function(x) x
-  )
-  # 让 shiny 的 update*Input 函数认为这是一个有效 session
-  class(s) <- c("ShinySession", "R6")
-  s
-}
-
-#' 创建项目工具（直接对接你的 tools list 和 import_methods）
-#' @param state reactiveValues
-#' @param tools_list 你的分析工具注册表（全局变量 tools）
-#' @param import_methods_list 你的导入方法注册表（全局变量 import_methods）
-create_project_tools <- function(state, tools_list, import_methods_list) {
+# ---------- 创建项目工具（对接 ToolRegistry / ImportRegistry） ----------
+create_project_tools <- function(on_tool_call = NULL) {
   list(
     # ---- 工具1：列出所有可用分析工具 ----
     aisdk::tool(
       name = "list_tools",
       description = "列出所有可用的分析工具及其分类",
-      parameters = aisdk::z_object(
-        dummy = aisdk::z_string(description = "占位参数", default = "")
-      ),
+      parameters = aisdk::z_object(dummy = aisdk::z_string(default = "")),
       execute = function(args) {
-        info <- lapply(names(tools_list), function(id) {
-          t <- tools_list[[id]]
-          list(
-            id = id,
-            name = t$name,
-            category = t$category,
-            omics = t$omics %||% "all",
-            output_type = t$output_type
-          )
-        })
-        names(info) <- names(tools_list)
-        list(tools = info, categories = unique(sapply(tools_list, `[[`, "category")))
+        if (!is.null(on_tool_call)) on_tool_call("list_tools", args)
+        info <- ToolRegistry$list_tools(omics_type = engine$project$omics_type)
+        names(info) <- sapply(info, function(x) x$name)
+        list(tools = info, categories = unique(sapply(info, function(x) x$category)))
       }
     ),
-    
-    # ---- 工具2：列出所有导入方法（data_list.R）----
+
+    # ---- 工具2：列出所有导入方法 ----
     aisdk::tool(
       name = "list_import_methods",
-      description = "列出所有可用的数据导入方法（如 RNA-seq、单细胞等）",
-      parameters = aisdk::z_object(
-        dummy = aisdk::z_string(description = "占位参数", default = "")
-      ),
+      description = "列出所有可用的数据导入方法",
+      parameters = aisdk::z_object(dummy = aisdk::z_string(default = "")),
       execute = function(args) {
-        info <- lapply(names(import_methods_list), function(id) {
-          m <- import_methods_list[[id]]
-          list(
-            id = id,
-            name = m$name,
-            description = paste("导入方法:", m$name)
-          )
-        })
-        names(info) <- names(import_methods_list)
+        if (!is.null(on_tool_call)) on_tool_call("list_import_methods", args)
+        info <- ImportRegistry$list_methods()
+        names(info) <- sapply(info, function(x) x$id)
         list(methods = info)
       }
     ),
-    
+
     # ---- 工具3：获取导入方法的参数定义 ----
     aisdk::tool(
       name = "get_import_method_params",
-      description = "获取某个导入方法的参数定义（如需要上传什么文件、选择什么选项）",
-      parameters = aisdk::z_object(
-        method_id = aisdk::z_string(description = "导入方法ID，如 'bulk_rna', 'single_cell'")
-      ),
+      description = "获取某个导入方法的参数定义和默认值",
+      parameters = aisdk::z_object(method_id = aisdk::z_string()),
       execute = function(args) {
         id <- args$method_id
-        if (!id %in% names(import_methods_list)) {
-          return(list(error = paste("无此导入方法。可用:", paste(names(import_methods_list), collapse = ", "))))
+        method <- ImportRegistry$get(id)
+        if (is.null(method)) {
+          return(list(error = paste("无此导入方法。可用:", paste(names(ImportRegistry$methods), collapse = ", "))))
         }
-        
-        m <- import_methods_list[[id]]
-        
-        # 解析 UI 定义（简化版，提取输入控件信息）
-        dummy_ns <- function(id) id
-        ui_def <- m$ui(dummy_ns)
-        
-        list(
-          method_id = id,
-          name = m$name,
-          has_validate = !is.null(m$validate),
-          has_preview = !is.null(m$preview_data),
-          ui_components = length(ui_def$children)
-        )
+        schema <- method$schema
+        params_info <- lapply(names(schema), function(pid) {
+          p <- schema[[pid]]
+          list(type = p$type, default = p$default %||% NULL, choices = p$choices %||% NULL,
+               required = p$required %||% FALSE, description = p$description %||% pid)
+        })
+        names(params_info) <- names(schema)
+        list(method_id = id, name = method$name, params = params_info,
+             required_params = names(schema)[sapply(schema, function(x) isTRUE(x$required))])
       }
     ),
-    
-    # ---- 工具4：获取项目状态（isolate 包裹所有 state 访问）----
-    aisdk::tool(
-      name = "get_state_summary",
-      description = "获取当前项目状态摘要：有哪些数据、结果、元信息、可用工具",
-      parameters = aisdk::z_object(
-        dummy = aisdk::z_string(description = "占位参数", default = "")
-      ),
-      execute = function(args) {
-        # 关键：用 isolate() 读取 reactiveValues，避免 "outside of reactive consumer" 错误
-        list(
-          project = shiny::isolate(state$name) %||% "未命名",
-          omics = shiny::isolate(state$omics_type) %||% "未设置",
-          data = names(shiny::isolate(state$data)),
-          meta = names(shiny::isolate(state$meta)),
-          results = names(shiny::isolate(state$res)),
-          available_tools = names(tools_list),
-          available_import_methods = names(import_methods_list)
-        )
-      }
-    ),
-    
-    # ---- 工具5：获取分析工具参数定义 ----
+
+    # ---- 工具4：获取分析工具的参数定义 ----
     aisdk::tool(
       name = "get_tool_params",
-      description = "获取某个分析工具的参数定义和默认值，AI 执行前必须先调用此工具确认参数",
-      parameters = aisdk::z_object(
-        tool_id = aisdk::z_string(description = "工具ID，如 'deg', 'pca', 'volcano', 'gsea'")
-      ),
+      description = "获取某个分析工具的参数定义和默认值",
+      parameters = aisdk::z_object(tool_id = aisdk::z_string()),
       execute = function(args) {
         id <- args$tool_id
-        if (!id %in% names(tools_list)) {
-          return(list(error = paste("无此工具。可用:", paste(names(tools_list), collapse = ", "))))
+        tool <- ToolRegistry$get(id)
+        if (is.null(tool)) {
+          return(list(error = paste("无此工具。可用:", paste(names(ToolRegistry$tools), collapse = ", "))))
         }
-        
-        t <- tools_list[[id]]
-        
-        # 用 isolate 读取 state，然后传给 params()
-        current_state <- shiny::isolate(reactiveValuesToList(state))
-        dummy_ns <- function(id) id
-        param_def <- t$params(dummy_ns, current_state)
-        
-        ui_list <- param_def$ui
-        ids <- param_def$ids
-        
-        params_info <- list()
-        for (pid in ids) {
-          ctrl <- NULL
-          for (el in ui_list$children) {
-            if (!is.null(el$attribs$id) && el$attribs$id == pid) {
-              ctrl <- el
-              break
-            }
-          }
-          
-          params_info[[pid]] <- list(
-            type = if (!is.null(ctrl)) ctrl$name else "unknown",
-            default = if (!is.null(ctrl$attribs$value)) ctrl$attribs$value else NULL,
-            choices = if (!is.null(ctrl$attribs$choices)) as.list(ctrl$attribs$choices) else NULL
-          )
-        }
-        
+        schema <- tool$schema
+        params_info <- lapply(names(schema), function(pid) {
+          p <- schema[[pid]]
+          list(type = p$type, default = p$default %||% NULL, choices = p$choices %||% NULL,
+               required = p$required %||% FALSE, description = p$description %||% pid,
+               min = p$min %||% NULL, max = p$max %||% NULL)
+        })
+        names(params_info) <- names(schema)
+        output_type <- if (!is.null(tool$outputs$plot) && !is.null(tool$outputs$table)) "both"
+                       else if (!is.null(tool$outputs$plot)) "plot"
+                       else if (!is.null(tool$outputs$table)) "table"
+                       else "none"
+        list(tool_id = id, name = tool$name, category = tool$category,
+             description = paste("分类:", tool$category, "| 输出:", output_type),
+             params = params_info,
+             required_params = names(schema)[sapply(schema, function(x) isTRUE(x$required))])
+      }
+    ),
+
+    # ---- 工具5：获取项目状态 ----
+    aisdk::tool(
+      name = "get_state_summary",
+      description = "获取当前项目状态摘要",
+      parameters = aisdk::z_object(dummy = aisdk::z_string(default = "")),
+      execute = function(args) {
+        if (!is.null(on_tool_call)) on_tool_call("get_state_summary", args)
+        st <- engine$project$to_list()
         list(
-          tool_id = id,
-          name = t$name,
-          description = paste("分类:", t$category, "| 输出:", t$output_type),
-          params = params_info,
-          required_params = ids
+          project = st$name,
+          omics = st$omics_type,
+          data = st$data,
+          meta = st$meta,
+          results = st$results,
+          available_tools = names(ToolRegistry$tools),
+          available_import_methods = names(ImportRegistry$methods)
         )
       }
     ),
-    
-    # ---- 工具6：执行分析工具（核心：用 isolate 读写 state，结果同步回 state）----
+
+    # ---- 工具6：执行分析工具 ----
     aisdk::tool(
       name = "run_tool",
-      description = "执行指定的分析工具，结果自动同步到 state$res。必须先调用 get_tool_params 确认参数",
+      description = "执行指定的分析工具，结果自动同步到 engine$project$results",
       parameters = aisdk::z_object(
         tool_id = aisdk::z_string(description = "工具ID"),
         inputs_json = aisdk::z_string(description = "JSON格式的参数对象", default = "{}")
       ),
       execute = function(args) {
+        if (!is.null(on_tool_call)) on_tool_call("run_tool", args)
         id <- args$tool_id
-        inputs_raw <- jsonlite::fromJSON(args$inputs_json %||% "{}")
-        
-        if (!id %in% names(tools_list)) {
+        inputs_raw <- tryCatch(jsonlite::fromJSON(args$inputs_json %||% "{}", simplifyVector = TRUE), error = function(e) list())
+        if (is.character(inputs_raw) && length(inputs_raw) == 1) {
+          inputs_raw <- tryCatch(jsonlite::fromJSON(inputs_raw, simplifyVector = TRUE), error = function(e) list())
+        }
+        if (!id %in% names(ToolRegistry$tools)) {
           return(list(error = paste("无此工具:", id)))
         }
-        
-        t <- tools_list[[id]]
-        
-        # 构建 inputs
-        dummy_ns <- function(x) x
-        current_state <- shiny::isolate(reactiveValuesToList(state))
-        param_def <- t$params(dummy_ns, current_state)
-        all_ids <- param_def$ids
-        
-        inputs <- list()
-        for (pid in all_ids) {
-          if (pid %in% names(inputs_raw)) {
-            inputs[[pid]] <- inputs_raw[[pid]]
-          } else {
-            inputs[[pid]] <- NULL
-          }
-        }
-        
-        # 执行 run 函数
         tryCatch({
-          mock_session <- create_mock_session()
-          mock_ns <- function(x) x
-          
-          # 关键：直接调用 t$run，传入真正的 state（不是副本）
-          # 用 isolate 包裹，允许在 non-reactive 上下文修改 reactiveValues
-          result <- shiny::isolate({
-            t$run(state, inputs, mock_session, mock_ns)
-          })
-          
-          # 检查 state$res 是否更新
-          new_results <- names(shiny::isolate(state$res))
-          
-          list(
-            success = TRUE,
-            tool = id,
-            message = paste("工具", t$name, "执行完成"),
-            results_in_state = new_results,
-            has_plot = !is.null(t$plot),
-            has_table = !is.null(t$table)
-          )
-          
+          result <- engine$run(id, inputs_raw)
+          if (result$success) {
+            tool <- ToolRegistry$get(id)
+            list(success = TRUE, tool = id,
+                 message = paste("工具", id, "执行完成"),
+                 project_state = engine$project$to_list(),
+                 has_plot = !is.null(tool$outputs$plot),
+                 has_table = !is.null(tool$outputs$table))
+          } else {
+            list(success = FALSE, error = result$error %||% "未知错误")
+          }
         }, error = function(e) {
-          list(
-            success = FALSE,
-            error = conditionMessage(e),
-            hint = "请确认：1) 数据已导入 2) 元信息完整 3) 参数正确。某些工具可能需要先执行其他工具（如先 deg 再 volcano）"
-          )
+          list(success = FALSE, error = conditionMessage(e),
+               hint = "请确认：1) 数据已导入 2) 元信息完整 3) 参数正确")
         })
       }
     ),
-    
+
     # ---- 工具7：获取分析结果 ----
     aisdk::tool(
       name = "get_analysis_result",
       description = "获取已完成的分析结果表格或摘要",
       parameters = aisdk::z_object(
-        result_name = aisdk::z_string(description = "结果名，如 'deg_res', 'pca_res', 'gsea_res'"),
+        result_name = aisdk::z_string(description = "结果名"),
         preview_n = aisdk::z_integer(description = "预览行数", default = 10)
       ),
       execute = function(args) {
+        if (!is.null(on_tool_call)) on_tool_call("get_analysis_result", args)
         name <- args$result_name
         n <- args$preview_n %||% 10
-        
-        res_all <- shiny::isolate(state$res)
-        if (!name %in% names(res_all)) {
-          return(list(error = paste("无此结果。可用:", paste(names(res_all), collapse = ", "))))
+        obj <- engine$project$get_result(name)
+        if (is.null(obj)) obj <- engine$project$data[[name]]
+        if (is.null(obj)) {
+          return(list(error = paste("无此结果。可用 results:", paste(names(engine$project$results), collapse = ", "),
+                                    "| 可用 data:", paste(names(engine$project$data), collapse = ", "))))
         }
-        
-        obj <- res_all[[name]]
-        
         if (is.data.frame(obj)) {
-          return(list(
-            type = "data.frame",
-            rows = nrow(obj),
-            cols = ncol(obj),
-            colnames = colnames(obj),
-            preview = head(obj, n)
-          ))
-        } else if (is.list(obj) && !is.null(obj$plot)) {
-          return(list(type = "plot_result", components = names(obj)))
+          return(list(type = "data.frame", rows = nrow(obj), cols = ncol(obj),
+                      colnames = colnames(obj), preview = head(obj, n)))
+        } else if (inherits(obj, "gseaResult")) {
+          return(list(type = "gseaResult", rows = nrow(obj@result),
+                      preview = head(obj@result, n)))
+        } else if (inherits(obj, "ggplot")) {
+          return(list(type = "ggplot", components = names(obj)))
         } else {
           return(list(type = class(obj), summary = capture.output(str(obj))))
         }
       }
     ),
-    
-    # ---- 工具8：执行自定义 R 代码 ----
+
+    # ---- 工具8：导入数据 ----
     aisdk::tool(
-      name = "run_r_code",
-      description = "执行任意 R 代码，环境中有 state$data, state$meta, state$res 及所有全局函数",
+      name = "import_data",
+      description = "导入组学数据到项目中。直接调用此工具，不要通过 run_tool。",
       parameters = aisdk::z_object(
-        code = aisdk::z_string(description = "R 代码")
+        method_id = aisdk::z_string(description = "导入方法ID，如 'bulk_rna'"),
+        inputs_json = aisdk::z_string(description = "JSON格式的参数对象", default = "{}"),
+        omics_type = aisdk::z_string(description = "组学类型标识", default = "bulk_rna")
       ),
       execute = function(args) {
+        if (!is.null(on_tool_call)) on_tool_call("import_data", args)
+        id <- args$method_id
+        omics <- args$omics_type %||% "bulk_rna"
+        inputs_raw <- tryCatch(jsonlite::fromJSON(args$inputs_json %||% "{}", simplifyVector = TRUE), error = function(e) list())
+        if (is.character(inputs_raw) && length(inputs_raw) == 1) {
+          inputs_raw <- tryCatch(jsonlite::fromJSON(inputs_raw, simplifyVector = TRUE), error = function(e) list())
+        }
+        if (!id %in% names(ImportRegistry$methods)) {
+          return(list(error = paste("无此导入方法:", id)))
+        }
+        tryCatch({
+          file_path <- inputs_raw$file_path %||% inputs_raw$file %||% NULL
+          if (is.null(file_path)) {
+            return(list(error = "缺少 file_path 参数。请提供文件的绝对路径"))
+          }
+          params <- inputs_raw
+          params$file_path <- NULL
+          engine$project$import_data(id, file_path, params)
+          st <- engine$project$to_list()
+          list(success = TRUE, method = id, omics_type = engine$project$omics_type,
+               data_summary = st$data,
+               message = paste("导入完成:", id, "| 数据:", paste(names(engine$project$data), collapse = ", ")))
+        }, error = function(e) {
+          list(success = FALSE, error = conditionMessage(e),
+               hint = "请确认：1) 文件路径正确且可读 2) 格式符合要求 3) 分组信息正确")
+        })
+      }
+    ),
+
+    # ---- 工具9：执行自定义 R 代码（只读） ----
+    aisdk::tool(
+      name = "run_r_code",
+      description = "执行任意 R 代码（只读查询）。禁止修改 project 状态",
+      parameters = aisdk::z_object(code = aisdk::z_string(description = "R 代码。只能读取，不能修改")),
+      execute = function(args) {
+        if (!is.null(on_tool_call)) on_tool_call("run_r_code", args)
         env <- new.env(parent = globalenv())
-        env$state <- shiny::isolate(reactiveValuesToList(state))
-        env$data <- shiny::isolate(state$data)
-        env$meta <- shiny::isolate(state$meta)
-        env$res <- shiny::isolate(state$res)
-        env$tools <- tools_list
-        env$import_methods <- import_methods_list
-        
+        env$project <- engine$project
+        env$data <- engine$project$data
+        env$meta <- engine$project$meta
+        env$results <- engine$project$results
+        env$tools <- ToolRegistry$tools
+        env$import_methods <- ImportRegistry$methods
         tryCatch({
           result <- eval(parse(text = args$code), envir = env)
           list(success = TRUE, class = class(result), summary = capture.output(print(result)))
+        }, error = function(e) {
+          list(success = FALSE, error = conditionMessage(e))
+        })
+      }
+    ),
+
+    # ---- 工具10：热加载工具 ----
+    aisdk::tool(
+      name = "reload_tools",
+      description = "热加载 R/tools/ 目录下的新工具文件",
+      parameters = aisdk::z_object(path = aisdk::z_string(description = "工具目录路径", default = "")),
+      execute = function(args) {
+        if (!is.null(on_tool_call)) on_tool_call("reload_tools", args)
+        tryCatch({
+          # 如果路径为空，使用默认路径
+          path <- args$path
+          if (is.null(path) || path == "") {
+            path <- file.path(APP_ROOT, "R", "tools")  # ← 修复：使用 APP_ROOT
+          }
+          reload_tools(path)
+          list(success = TRUE, tools = names(ToolRegistry$tools),
+               message = paste("已加载", length(ToolRegistry$tools), "个工具"))
         }, error = function(e) {
           list(success = FALSE, error = conditionMessage(e))
         })
@@ -322,97 +260,119 @@ create_project_tools <- function(state, tools_list, import_methods_list) {
   )
 }
 
-#' 带 Tool 的 AI 调用（对接 tools 注册表 + import_methods）
-call_ai_with_tools <- function(prompt, config, state, tools_list, import_methods_list) {
+# ---------- 带 Tool 的 AI 调用（同步执行，操作 engine$project） ----------
+call_ai_with_tools <- function(prompt, config, on_tool_call = NULL) {
+
+  # 临时屏蔽 UI 函数
+  has_orig_showNotification <- exists("showNotification", envir = .GlobalEnv)
+  if (!has_orig_showNotification) {
+    assign("showNotification", function(...) invisible(NULL), envir = .GlobalEnv)
+  }
+  has_orig_shinyalert <- exists("shinyalert", envir = .GlobalEnv)
+  if (!has_orig_shinyalert && requireNamespace("shinyalert", quietly = TRUE)) {
+    assign("shinyalert", function(...) invisible(NULL), envir = .GlobalEnv)
+  }
+  on.exit({
+    if (!has_orig_showNotification) rm("showNotification", envir = .GlobalEnv)
+    if (!has_orig_shinyalert) rm("shinyalert", envir = .GlobalEnv)
+  })
+
   provider <- config$ai$provider
   key <- config$ai$key
   model_id <- config$ai$model
   base_url <- config$ai$base_url
-  
+
   if (is.null(key) || key == "") stop("API Key 未设置")
-  
-  model <- switch(provider,
-    "openai" = {
-      if (!is.null(base_url) && base_url != "") {
-        openai$language_model(model_id, api_key = key, base_url = base_url)
-      } else {
-        openai$language_model(model_id, api_key = key)
-      }
-    },
-    "deepseek" = create_deepseek(api_key = key)$language_model(model_id),
-    "aliyun"   = create_aliyun(api_key = key)$language_model(model_id),
-    "custom"   = openai$language_model(model_id, api_key = key, base_url = base_url),
-    stop("不支持的提供商: ", provider)
-  )
-  
-    tools <- create_project_tools(state, tools_list, import_methods_list)
-  
-  steps <- character()  # 收集每一步的文本
-  
+
+  # 兼容性处理：aisdk 包版本差异
+  model <- tryCatch({
+    switch(provider,
+      "openai" = {
+        if (!is.null(base_url) && base_url != "") {
+          openai$language_model(model_id, api_key = key, base_url = base_url)
+        } else {
+          openai$language_model(model_id, api_key = key)
+        }
+      },
+      "deepseek" = {
+        if (exists("create_deepseek", mode = "function")) {
+          create_deepseek(api_key = key)$language_model(model_id)
+        } else {
+          openai$language_model(model_id, api_key = key, base_url = "https://api.deepseek.com")
+        }
+      },
+      "aliyun" = {
+        if (exists("create_aliyun", mode = "function")) {
+          create_aliyun(api_key = key)$language_model(model_id)
+        } else {
+          openai$language_model(model_id, api_key = key, base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        }
+      },
+      "custom" = openai$language_model(model_id, api_key = key, base_url = base_url),
+      stop("不支持的提供商: ", provider)
+    )
+  }, error = function(e) {
+    if (provider == "deepseek") {
+      openai$language_model(model_id, api_key = key, base_url = "https://api.deepseek.com")
+    } else if (provider == "aliyun") {
+      openai$language_model(model_id, api_key = key, base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    } else {
+      stop(e)
+    }
+  })
+
+  tools <- create_project_tools(on_tool_call = on_tool_call)
+
   system_prompt <- paste(
-    "你是一个生物信息学分析助手。你可以访问用户的项目数据并执行分析。",
+    "你是生物信息学分析助手。",
     "",
-    "可用工具：",
-    "1. list_tools(dummy='') - 列出分析工具（差异分析、PCA、火山图等）",
-    "2. list_import_methods(dummy='') - 列出数据导入方法（RNA-seq、单细胞等）",
-    "3. get_state_summary(dummy='') - 查看当前项目状态",
-    "4. get_tool_params(tool_id='deg') - 获取分析工具的参数定义",
-    "5. get_import_method_params(method_id='bulk_rna') - 获取导入方法的参数",
-    "6. run_tool(tool_id='deg', inputs_json='{\"method\":\"DESeq2\"}') - 执行分析（结果同步到 state）",
-    "7. get_analysis_result(result_name='deg_res', preview_n=10) - 获取结果",
-    "8. run_r_code(code='...') - 执行自定义 R 代码",
+    "可用工具（直接调用，不是 run_tool 的参数）：",
+    "• import_data(method_id, inputs_json, omics_type) — 数据导入",
+    "• run_tool(tool_id, inputs_json) — 分析执行",
+    "• get_state_summary() — 查看状态",
+    "• get_tool_params(tool_id) — 查分析工具参数",
+    "• get_import_method_params(method_id) — 查导入方法参数",
+    "• list_tools() / list_import_methods() — 列可用项",
+    "• get_analysis_result(result_name) — 取结果",
+    "• run_r_code(code) — 只读查询（修改不生效）",
+    "• reload_tools(path) — 热加载新工具",
     "",
-    "工作流：",
-    "1. 用户要求分析 → get_state_summary 确认数据状态",
-    "2. get_tool_params 确认参数 → run_tool 执行 → get_analysis_result 查看结果",
-    "3. 导入数据问题 → list_import_methods → get_import_method_params",
-    "执行规范（必须遵守）：",
-    "1. 开始任何分析前，先输出'🚀 正在启动 XX 分析...'",
-    "2. 调用 list_tools / get_tool_params 后，输出'📋 已获取工具参数'",
-    "3. 调用 run_tool 后，输出'⚙️ 正在执行...'",
-    "4. 调用 get_analysis_result 后，输出'✅ 分析完成，结果如下'",
-    "5. 如果接近步数上限，输出'⚠️ 步骤较多，建议分步执行'",
-    "【结果展示规范 - 必须遵守】：",
-    "1. 分析完成后，先用 1-2 句话概括结果（如上调/下调基因数、关键发现）",
-    "2. 必须明确告知用户查看位置：",
-    "   - 差异分析/富集分析/绘图结果 → '📊 完整结果请前往【分析】模块查看'",
-    "   - 导入的数据矩阵 → '📁 数据已导入，请前往【数据预处理】模块预览和确认'",
-    "   - 项目文件 → '💾 项目已保存，请前往【项目管理】模块查看'",
-    "3. 如需展示预览，调用 get_analysis_result 获取前10行，用 Markdown 表格展示",
-    "4. 绝不声称'没有结果'或'结果未生成'，只要 run_tool 返回 success，结果就在 state$res 中",
-    sep = "\n"
+    "工作流（严格顺序）：",
+    "1. 导入 → import_data（不要预读文件，直接传路径）",
+    "2. 分析 → get_state_summary → get_tool_params → run_tool",
+    "3. 查看 → get_analysis_result",
+    "",
+    "铁律：",
+    "× 禁止直接修改 project（run_r_code 只读，import_data/run_tool 是唯二写入方式）",
+    "× import_data 失败即停，禁止用 run_r_code 反复试探",
+    "× 单任务 ≤5 个 tool call，超则建议用户分步",
+    "× 不暴露绝对路径",
+    "× run_tool 失败后，禁止用 run_r_code 侦查原因。直接报告错误给用户。",
+    "× get_tool_params 已返回完整参数定义，禁止再用 run_r_code 验证。",
+    "",
+    "回复格式：",
+    "• 结果概括（1-2句）→ 查看位置（📊分析/📁数据/💾项目）→ 可选表格预览",
+    sep = "
+"
   )
 
-  # 流式调用，通过回调追加步骤
   result <- aisdk::generate_text(
     model = model,
     prompt = prompt,
     system = system_prompt,
     tools = tools,
-    max_steps = 100,
-    temperature = 0.2,
-    stream = TRUE,
-    on_chunk = function(chunk) {
-      # 每个 chunk 可能是文本或工具调用请求
-      if (!is.null(chunk$tool_call)) {
-        # 记录工具调用
-        step_msg <- paste0("🔧 正在调用工具: ", chunk$tool_call$name, "(", 
-                          jsonlite::toJSON(chunk$tool_call$arguments), ")")
-        steps <<- c(steps, step_msg)
-      } else if (!is.null(chunk$text)) {
-        steps <<- c(steps, chunk$text)
-      }
-    }
+    max_steps = 25,
+    temperature = 0.2
   )
-  
-  # 将步骤合并为最终显示
-  paste(steps, collapse = "\n\n")
-  
+
   if (!is.null(result$finish_reason) && result$finish_reason == "max_steps") {
     return(paste0(
       result$text,
-      "\n\n---\n[系统提示] AI 思考步数已达上限，分析可能未完成。",
-      "请简化问题，或分步执行（如先只做差异分析，确认结果后再做下游分析）。"
+      "
+
+---
+[系统提示] AI 思考步数已达上限，分析可能未完成。",
+      "请简化问题，或分步执行。"
     ))
   }
 

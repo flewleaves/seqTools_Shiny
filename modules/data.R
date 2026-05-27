@@ -1,27 +1,19 @@
+# modules/data.R
+
 data_ui <- function(id) {
   ns <- NS(id)
   layout_sidebar(
     sidebar = sidebar(
       title = "读取数据",
-      # 选择组学类型的按钮组（高亮）
-      shinyWidgets::radioGroupButtons(
-        inputId = ns("import_method"),
-        label = "选择组学类型",
-        choices = setNames(
-          names(import_methods),
-          sapply(import_methods, `[[`, "name")
-        ),
-        selected = "bulk_rna",
-        status = "primary"
+      radioGroupButtons(
+        inputId = ns("import_method"), label = "选择组学类型",
+        choices = c("加载中..." = ""), selected = "", status = "primary"
       ),
       hr(),
-      
-      # 这里动态显示当前导入方法对应的 UI
       uiOutput(ns("method_ui")),
-      
       hr(),
       sliderInput(ns("page_size"), "每页行数", min = 5, max = 100, value = 10),
-      actionButton(ns("confirm_input"), "确认输入", class = "btn-info")
+      actionButton(ns("confirm_input"), "确认导入", class = "btn-info")
     ),
     card(
       full_screen = TRUE,
@@ -32,204 +24,294 @@ data_ui <- function(id) {
   )
 }
 
-
 data_server <- function(id, state, nav_session) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
-    # ---------- 当前选中的导入方法 ----------
-    current_method <- reactive({
-      req(input$import_method)
-      import_methods[[input$import_method]]
+    # 临时存文件上传后读取的原始 df（用于列选择 modal）
+    temp_df   <- reactiveVal(NULL)
+    temp_cols <- reactiveVal(list())   # 用户在 modal 里确认的列信息
+
+    # ---------- 注册表同步 ----------
+    observe({
+      invalidateLater(2000)
+      methods <- ImportRegistry$list_methods()
+      if (length(methods) > 0) {
+        choices <- setNames(
+          sapply(methods, `[[`, "id"),
+          sapply(methods, `[[`, "name")
+        )
+        updateRadioGroupButtons(session, "import_method",
+                                choices = choices, selected = choices[1])
+      }
     })
 
-    # ---------- 动态生成导入方法的 UI ----------
+    current_method <- reactive({
+      req(input$import_method, input$import_method != "")
+      ImportRegistry$get(input$import_method)
+    })
+
+    # ---------- 动态 UI（schema → 控件），bulk_rna 特殊处理 ----------
     output$method_ui <- renderUI({
       req(current_method())
-      current_method()$ui(ns)
+      mid <- input$import_method
+
+      if (mid == "bulk_rna") {
+        # bulk_rna 的列选择在 modal 里做，这里只显示元数据控件
+        tagList(
+          helpText("请上传基因表达矩阵，行为基因，列为样本。"),
+          fileInput(ns("infile"), "选择 CSV/TXT", accept = c(".csv", ".txt")),
+          hr(),
+          selectInput(ns("data_type"), "数据类型",
+                      choices = c("auto" = "auto", "count","tpm","fpkm","cpm"), selected = "auto"),
+          selectInput(ns("log_state"), "是否log化",
+                      choices = c("自动检测" = "auto", "是" = "TRUE", "否" = "FALSE"), selected = "auto"),
+          selectInput(ns("species"), "物种",
+                      choices = c("自动检测" = "auto", "Human" = "Hs", "Mouse" = "Mm"), selected = "auto"),
+          selectInput(ns("id_type"), "基因ID类型",
+                      choices = c("自动检测" = "auto", "SYMBOL","ENSEMBL","ENTREZID"), selected = "auto"),
+          textAreaInput(ns("group_info"), "分组信息",
+                        placeholder = "组名,样本数;...  例: Control,3;Treat,3", rows = 3),
+          hr(),
+          actionButton(ns("id_convert"), "手动ID转换为SYMBOL", class = "btn-outline-info btn-sm")
+        )
+      } else {
+        # 其他导入方法走通用 schema_to_ui
+        schema <- current_method()$schema
+        if (length(schema) == 0) return(NULL)
+        schema_to_ui(schema, ns, state)
+      }
     })
 
-    # ====================================================================
-    #   以下保留 RNA‑seq 特有的交互逻辑（如列选择、ID 转换等）
-    #   通过 req(input$import_method == "bulk_rna") 限制其只在 RNA‑seq 模式下生效
-    # ====================================================================
-
-    # ---- 1. RNA‑seq：上传文件后的列选择对话框 ----
+    # ================================================================
+    #  bulk_rna：上传文件后弹 modal 选列
+    # ================================================================
     observeEvent(input$infile, {
-      req(input$import_method == "bulk_rna")
-      showNotification("读取中...", type = "message", duration = 2)
-      
+      req(input$import_method == "bulk_rna", input$infile)
       if (is.null(state$name)) {
-        showNotification("请先创建项目", type = "error", duration = NULL)
-        return()
+        showNotification("请先创建项目", type = "error", duration = NULL); return()
       }
-      
+      showNotification("读取中...", type = "message", duration = 2)
       tryCatch({
         df <- data.table::fread(input$infile$datapath, header = TRUE, data.table = FALSE)
-        state$meta[["filename"]] <- input$infile$name
-        state$temp_df <- na.omit(df)
-        
-        showModal(
-          modalDialog(
-            title = "确认数据结构", size = "l",
-            p("请指定基因 ID 列和样本表达值列。"),
-            selectInput(ns("gene_col"), "基因 ID 列",
-                        choices = names(df), selected = names(df)[1]),
-            selectInput(ns("gene_length"), "基因长度信息(可选)",
-                        choices = c("", names(df)), selected = ""),
-            checkboxGroupInput(ns("sample_col"), "样本列（可多选）",
-                               choices = names(df), selected = names(df)[-1]),
-            footer = tagList(
-              actionButton(ns("cancel_cols"), "取消"),
-              actionButton(ns("confirm_cols"), "确认", class = "btn-primary")
-            ),
-            easyClose = FALSE
-          )
-        )
+        df <- na.omit(df)
+        temp_df(df)
+
+        showModal(modalDialog(
+          title = "确认数据结构", size = "l",
+          p("请指定基因ID列和样本列。"),
+          selectInput(ns("gene_col"), "基因ID列",
+                      choices = names(df), selected = names(df)[1]),
+          selectInput(ns("gene_length_col"), "基因长度列（可选，用于 RPKM/FPKM）",
+                      choices = c("无" = "", names(df)), selected = ""),
+          checkboxGroupInput(ns("sample_col"), "样本列（可多选）",
+                             choices = names(df), selected = names(df)[-1]),
+          footer = tagList(
+            actionButton(ns("cancel_cols"), "取消"),
+            actionButton(ns("confirm_cols"), "确认", class = "btn-primary")
+          ),
+          easyClose = FALSE
+        ))
       }, error = function(e) {
-        showNotification(paste("失败:", e$message), type = "error", duration = NULL)
+        showNotification(paste("读取失败:", e$message), type = "error", duration = NULL)
       })
     })
 
-    # ---- 2. RNA‑seq：确认列选择 ----
+    # 用户取消列选择
+    observeEvent(input$cancel_cols, {
+      temp_df(NULL); temp_cols(list()); removeModal()
+    })
+
+    # 用户确认列选择 → 自动检测数据属性，更新 UI
     observeEvent(input$confirm_cols, {
       req(input$import_method == "bulk_rna")
-      
-      state$temp_df <- state$temp_df[, c(input$gene_col, input$sample_col)]
-      state$meta[["gene.length"]] <- if (is.null(input$gene_length) || input$gene_length == "") NULL else input$gene_length
-      
-      detected <- detect_data(state$temp_df, state$meta)
-      showNotification("自动检测数据属性中...", type = "message", duration = 5)
-      state$meta <- detected
-      update_fields <- c("data_type", "log_state", "species", "id_type")
-      for (x in update_fields) {
-        if (!is.null(detected[[x]])) {
-          updateSelectInput(session, x, selected = detected[[x]])
+      df <- temp_df()
+      req(df)
+
+      gene_col    <- input$gene_col
+      sample_cols <- input$sample_col
+      gene_length <- input$gene_length_col
+
+      # 只保留选中列
+      df_sel <- df[, c(gene_col, sample_cols), drop = FALSE]
+      temp_df(df_sel)
+      temp_cols(list(gene_col = gene_col, sample_cols = sample_cols,
+                     gene_length = gene_length))
+
+      # 自动检测
+      meta <- detect_data(df_sel, list(filename = input$infile$name))
+      for (field in c("data_type", "log_state", "species", "id_type")) {
+        val <- meta[[field]]
+        if (!is.null(val)) {
+          updateSelectInput(session, field, selected = as.character(val))
         }
       }
       removeModal()
-      showNotification(paste("导入:", nrow(state$temp_df), "x", ncol(state$temp_df)),
-                       type = "message", duration = 5)
-      
-      if (!is.null(detected$id_type) && detected$id_type != "SYMBOL") {
+      showNotification(
+        paste0("已选 ", nrow(df_sel), " 行 × ", length(sample_cols), " 个样本"),
+        type = "message", duration = 4
+      )
+
+      # 若检测到非 SYMBOL，提示转换
+      if (!is.null(meta$id_type) && meta$id_type != "SYMBOL") {
         shinyalert(
           title = "ID 转换提示",
-          text = paste0("检测到基因 ID 类型为 ", detected$id_type, "，是否转换为 SYMBOL？"),
-          type = "info",
-          showCancelButton = TRUE,
-          confirmButtonText = "是，转换",
-          cancelButtonText = "否，保持原样",
+          text  = paste0("检测到基因ID为 ", meta$id_type, "，是否在导入时转换为 SYMBOL？"),
+          type  = "info",
+          showCancelButton  = TRUE,
+          confirmButtonText = "是，导入时转换",
+          cancelButtonText  = "否，保持原样",
           callbackR = function(value) {
-            if (value) {
-              tryCatch({
-                colnames(state$temp_df)[1] <- "Geneid"
-                state$temp_df <- seqTools::Quick_ID_conversion(
-                  state$temp_df, species = state$meta[["species"]],
-                  from = state$meta[["id_type"]], to = "SYMBOL"
-                )
-                state$meta[["id_type"]] <- "SYMBOL"
-              }, error = function(e) {
-                showNotification(paste("失败:", e$message), type = "error", duration = NULL)
-              })
-            }
-            # value = FALSE 时什么都不做，保持原样
+            if (value) updateSelectInput(session, "id_type", selected = meta$id_type)
+            # 实际转换在 confirm_input 里根据 id_type != SYMBOL 决定
           }
         )
       }
     })
 
-    observeEvent(input$cancel_cols, {
-      state$temp_df <- NULL
-      removeModal()
-    })
-  
-    # ---- 3. RNA‑seq：手动属性更新 ----
-    observeEvent(input$data_type, {
-      req(input$import_method == "bulk_rna")
-      state$meta[["data_type"]] <- input$data_type
-    })
-    observeEvent(input$id_type, {
-      req(input$import_method == "bulk_rna")
-      state$meta[["id_type"]] <- input$id_type
-    })
-    observeEvent(input$log_state, {
-      req(input$import_method == "bulk_rna")
-      state$meta[["log_state"]] <- input$log_state
-    })
-    observeEvent(input$species, {
-      req(input$import_method == "bulk_rna")
-      state$meta[["species"]] <- input$species
-    })
-    observeEvent(input$group_info, {
-      req(input$import_method == "bulk_rna")
-      state$meta[["group_info"]] <- parse_group_info(input$group_info)
-    })
-
-    # ---- 4. RNA‑seq：ID 转换按钮 ----
+    # 手动 ID 转换按钮（立即对 temp_df 执行）
     observeEvent(input$id_convert, {
       req(input$import_method == "bulk_rna")
+      df <- temp_df(); req(df)
       tryCatch({
-        colnames(state$temp_df)[1] <- "Geneid"
-        state$temp_df <- seqTools::Quick_ID_conversion(
-          state$temp_df, species = state$meta[["species"]],
-          from = state$meta[["id_type"]], to = "SYMBOL"
+        colnames(df)[1] <- "Geneid"
+        df <- seqTools::Quick_ID_conversion(
+          df, species = input$species, from = input$id_type, to = "SYMBOL"
         )
-        state$meta[["id_type"]] <- "SYMBOL"
+        temp_df(df)
+        updateSelectInput(session, "id_type", selected = "SYMBOL")
+        showNotification("ID 转换完成", type = "message")
       }, error = function(e) {
-        showNotification(paste("失败:", e$message), type = "error", duration = NULL)
+        showNotification(paste("转换失败:", e$message), type = "error", duration = NULL)
       })
     })
 
-
-    # ====================================================================
-    #   通用确认输入按钮（所有导入方法共用）
-    # ====================================================================
+    # ================================================================
+    #  通用确认导入
+    # ================================================================
     observeEvent(input$confirm_input, {
-      method <- current_method()
-      
-      # 1. 调用方法自己的验证函数
-      valid <- method$validate(input, state)
-      if (is.character(valid)) {
-        showNotification(valid, type = "error", duration = NULL)
-        return()
+      req(state$name, input$import_method != "")
+      method <- current_method(); req(method)
+      mid <- input$import_method
+
+      if (mid == "bulk_rna") {
+        # bulk_rna：必须已选列
+        df <- temp_df()
+        if (is.null(df)) {
+          showNotification("请先上传文件并确认数据结构", type = "error"); return()
+        }
+        cols <- temp_cols()
+        group_vec <- parse_group_info(input$group_info %||% "")
+        n_samples  <- length(cols$sample_cols %||% (ncol(df) - 1))
+        if (!is.null(group_vec) && length(group_vec) != n_samples) {
+          showNotification(paste0("分组数(", length(group_vec),
+                                  ") 与样本数(", n_samples, ") 不匹配"),
+                           type = "error", duration = NULL)
+          return()
+        }
+
+        # 去重策略：优先用 settings
+        dup_from_settings <- tryCatch(
+          state$settings$analysis$dup %||% "kmax",
+          error = function(e) "kmax"
+        )
+
+        params <- list(
+          gene_col          = cols$gene_col    %||% "",
+          sample_cols       = paste(cols$sample_cols %||% "", collapse = ","),
+          gene_length       = cols$gene_length %||% "",
+          data_type         = input$data_type  %||% "auto",
+          log_state         = input$log_state  %||% "auto",
+          species           = input$species    %||% "auto",
+          id_type           = input$id_type    %||% "auto",
+          id_convert        = if (!is.null(input$id_type) && input$id_type != "SYMBOL" &&
+                                  input$id_type != "auto") "to_SYMBOL" else "no",
+          dup_method        = "settings",
+          dup_from_settings = dup_from_settings,
+          group_info        = input$group_info %||% ""
+        )
+
+        # 把已预处理的 temp_df 写成临时文件，让 IMPORT_RUN 读取
+        # （这样 AI 和 UI 都走同一个 IMPORT_RUN 入口，架构一致）
+        tmp <- tempfile(fileext = ".csv")
+        data.table::fwrite(cbind(rowname__ = rownames(df), df)
+                           |> (\(x) { names(x)[1] <- cols$gene_col %||% names(df)[1]; x })(),
+                           tmp)
+        # 如果 temp_df 已经是纯数值（列选择后），直接 fwrite
+        data.table::fwrite(data.frame(Gene = rownames(df), df, check.names = FALSE), tmp)
+
+      } else {
+        # 其他方法：从 schema 收集 input
+        inputs <- list(); file_path <- NULL
+        for (pid in names(method$schema)) {
+          pdef <- method$schema[[pid]]
+          val  <- input[[pid]]
+          if (pdef$type == "file") {
+            if (is.list(val) && !is.null(val$datapath)) file_path <- val$datapath
+          } else {
+            inputs[[pid]] <- val
+          }
+        }
+        if (is.null(file_path)) {
+          showNotification("请先上传文件", type = "error"); return()
+        }
+        tmp    <- file_path
+        params <- inputs
       }
-      
-      # 2. 执行导入
+
+      nid <- showNotification("导入中...", type = "message", duration = NULL)
       tryCatch({
-        method$run(input, state, session, ns)
-        # 导入成功后自动跳转到“分析”面板
+        result <- engine$project$import_data(mid, tmp, params)
+        if (!isTRUE(result$success) && !is.null(result$error)) stop(result$error)
+
+        state$data       <- engine$project$data
+        state$meta       <- engine$project$meta
+        state$omics_type <- engine$project$omics_type
+        temp_df(NULL); temp_cols(list())
+
+        removeNotification(nid)
+        showNotification("导入完成", type = "message")
         nav_select("main_nav", selected = "分析", session = nav_session)
       }, error = function(e) {
+        removeNotification(nid)
         showNotification(paste("导入失败:", e$message), type = "error", duration = NULL)
       })
     })
 
-    # ====================================================================
-    #   数据预览（根据当前导入方法动态显示）
-    # ====================================================================
+    # ================================================================
+    #  数据预览
+    # ================================================================
     output$preview <- DT::renderDataTable({
-      validate(need(!is.null(state$name), "请先创建项目"))
-      method <- current_method()
-      # 使用方法的预览函数获取数据，如果没有则返回 NULL
-      data <- if (!is.null(method$preview_data)) method$preview_data(input, state) else NULL
-      validate(need(!is.null(data), "请先导入数据"))
-      
-      DT::datatable(data, options = list(
-        pageLength = input$page_size,
-        scrollX = TRUE,
-        scrollY = "400px",
-        dom = 'lfrtip'
-      ), rownames = FALSE)
+      # 优先展示 temp_df（列选择后、导入前）
+      df <- temp_df()
+      if (!is.null(df)) {
+        return(DT::datatable(head(df, 200),
+          options = list(pageLength = input$page_size, scrollX = TRUE, dom = 'tip'),
+          rownames = FALSE))
+      }
+      # 已导入数据
+      if (!is.null(state$name) && length(state$data) > 0) {
+        mat <- state$data[[1]]
+        if (!is.null(mat)) {
+          df <- as.data.frame(head(mat, 100))
+          return(DT::datatable(df,
+            options = list(pageLength = input$page_size, scrollX = TRUE, dom = 'tip')))
+        }
+      }
+      validate(need(FALSE, "请上传文件并确认数据结构"))
     })
 
-    # ---- 调试信息 ----
     output$debug_info <- renderPrint({
-      cat("项目:", ifelse(is.null(state$name), "无", state$name), "\n")
-      cat("当前导入方法:", input$import_method, "\n")
-      if (input$import_method == "bulk_rna") {
-        cat("临时数据:", ifelse(is.null(state$temp_df), "NULL", paste(dim(state$temp_df), collapse = " x ")), "\n")
-      } else if (input$import_method == "single_cell") {
-        cat("Seurat对象:", ifelse(is.null(state$seurat_obj), "未创建", "已创建"), "\n")
+      cat("项目:", state$name %||% "无", "\n")
+      cat("导入方法:", input$import_method %||% "无", "\n")
+      df <- temp_df()
+      if (!is.null(df)) {
+        cat("待导入数据:", paste(dim(df), collapse = " x "), "\n")
+        cols <- temp_cols()
+        cat("基因列:", cols$gene_col %||% "未选", "\n")
+        cat("样本列:", length(cols$sample_cols %||% c()), "个\n")
+      } else if (length(state$data) > 0) {
+        cat("已导入数据:", paste(dim(state$data[[1]]), collapse = " x "), "\n")
       }
     })
   })
