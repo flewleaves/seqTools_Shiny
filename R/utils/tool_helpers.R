@@ -1,6 +1,40 @@
 # R/utils/tool_helpers.R
 # 公共工具辅助函数
 
+#' 构建相对于 APP_ROOT 的路径
+app_root <- function(...) file.path(APP_ROOT, ...)
+
+#' 记录分析方法信息（底层函数 + 版本 + 参数）
+#' @param tool_id      工具标识
+#' @param tool_display 工具显示名
+#' @param underlying   底层函数/方法名（如 DESeq2、limma、prcomp）
+#' @param pkg          底层函数所属 R 包
+#' @param params       实际使用的参数列表
+#' @return method_info 列表，供 engine$run 存入 project$results$_methods
+record_method <- function(tool_id, tool_display, underlying, pkg, params) {
+  # 去除非参数字段（project、data 等引用对象不记录）
+  clean_params <- params
+  clean_params$project <- NULL
+  clean_params$count_mat <- NULL
+  clean_params$mat <- NULL
+  clean_params$dataList <- NULL
+  clean_params$dataLists <- NULL
+  clean_params$merged_seurat <- NULL
+  clean_params$seurat_obj <- NULL
+
+  ver <- tryCatch(as.character(packageVersion(pkg)), error = function(e) "未知")
+
+  list(
+    tool      = tool_id,
+    tool_name = tool_display,
+    method    = underlying,
+    package   = pkg,
+    version   = ver,
+    params    = clean_params,
+    time      = format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  )
+}
+
 #' 解析分组信息文本
 #' @param text 格式如 "组名,样本数;..."
 #' @return 字符向量，每个元素是一个样本所属组

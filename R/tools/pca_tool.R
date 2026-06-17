@@ -3,6 +3,8 @@
 
 TOOL_NAME <- "pca"
 TOOL_CATEGORY <- "数据绘图"
+TOOL_OMICS <- "bulk_rna"
+TOOL_ORDER <- 35
 TOOL_DISPLAY_NAME <- "PCA图"
 
 TOOL_SCHEMA <- list(
@@ -30,7 +32,8 @@ TOOL_RUN <- function(inputs, project) {
 
   list(
     data = list(plot = res$plot),
-    messages = res$note
+    messages = res$note,
+    method_info = record_method("pca", "PCA图", "stats::prcomp", "stats", inputs)
   )
 }
 

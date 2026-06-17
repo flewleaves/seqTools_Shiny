@@ -2,6 +2,7 @@
 TOOL_NAME         <- "deg"
 TOOL_CATEGORY     <- "差异/富集分析"
 TOOL_OMICS        <- "bulk_rna"
+TOOL_ORDER        <- 20
 TOOL_DISPLAY_NAME <- "差异分析"
 
 TOOL_SCHEMA <- list(
@@ -38,10 +39,17 @@ TOOL_RUN <- function(inputs, project) {
 
   project$meta$deg_contrast <- inputs$contrast
 
+  # 底层包映射
+  deg_pkg <- switch(inputs$method,
+    DESeq2 = "DESeq2", limma = "limma", edgeR = "edgeR",
+    wilcox = "stats", t = "stats", "unknown"
+  )
+
   # 返回 named list，engine$run 会存为 deg_result（key = "deg_result"）
   list(
     data     = list(result = res$result),
-    messages = res$note
+    messages = res$note,
+    method_info = record_method("deg", "差异分析", inputs$method, deg_pkg, inputs)
   )
 }
 

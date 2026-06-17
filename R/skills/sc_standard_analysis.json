@@ -1,0 +1,51 @@
+{
+  "name": "sc_standard_analysis",
+  "display_name": "单细胞标准分析",
+  "description": "完整scRNA-seq流程：导入 → QC过滤 → 标准化+PCA → Harmony整合 → 聚类+UMAP → 标记基因 → 可视化。适用场景：用户提供了数据目录路径，从导入到出图全自动。",
+  "category": "pipeline",
+  "version": "2.0.0",
+  "author": "seqTools",
+  "omics": ["single_cell"],
+  "steps": [
+    {
+      "id": "import",
+      "tool": "single_cell",
+      "params": {
+        "action": "import",
+        "species": "Hs"
+      },
+      "description": "导入数据：扫描目标目录所有样本（自动识别10X/h5/txt/rds格式）。必填参数 file=<目录路径>，需通过 overrides 传入绝对路径。导入后留在数据页做QC过滤。"
+    },
+    {
+      "id": "cluster",
+      "tool": "sc_cluster",
+      "params": {
+        "method": "UMAP",
+        "resolution": "0.4,0.8",
+        "reduction": "pca",
+        "save_to_disk": false
+      },
+      "description": "聚类+UMAP降维可视化（跳过预处理/标准化，适用于已过滤的导入数据）"
+    },
+    {
+      "id": "markers",
+      "tool": "sc_markers",
+      "params": {
+        "n": 10,
+        "draw": true,
+        "high_expr": true
+      },
+      "description": "各cluster的top10标记基因"
+    },
+    {
+      "id": "visualize",
+      "tool": "sc_vis",
+      "params": {
+        "plot_type": "DimPlot",
+        "group_by": "seurat_clusters",
+        "reduction": "umap"
+      },
+      "description": "DimPlot展示聚类结果"
+    }
+  ]
+}

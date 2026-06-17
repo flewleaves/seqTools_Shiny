@@ -2,7 +2,10 @@
 
 CONFIG_FILE <- "seqTools_config.ini"
 
-default_config <- function(work_dir = APP_ROOT) {
+default_config <- function(work_dir = NULL) {
+  if (is.null(work_dir)) {
+    work_dir <- if (exists("APP_WORK_DIR")) get("APP_WORK_DIR") else getwd()
+  }
   list(
     AI = list(
       provider = "deepseek",

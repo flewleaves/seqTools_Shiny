@@ -10,7 +10,7 @@ except Exception:
     pass
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import os
@@ -57,25 +57,71 @@ async def lifespan(app: FastAPI):
         try:
             tools = await asyncio.to_thread(r_bridge.list_tools)
             ai_tools_schema = build_tools_schema(tools)
-            # 添加 execute_r 工具
+            # list_tools：AI 可查看所有可用工具
+            ai_tools_schema.append({
+                "type": "function",
+                "function": {
+                    "name": "list_tools",
+                    "description": "列出所有可用的分析工具（名称+说明），不确定工具名时先调这个。",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            })
+            # execute_r：仅数据探查，硬限制每会话 1 次
             ai_tools_schema.append({
                 "type": "function",
                 "function": {
                     "name": "execute_r",
-                    "description": "执行自定义 R 代码。可用于数据分析、画图、数据操作等。注意：每次调用执行独立的 R 子进程，但自动保存/恢复项目状态。",
+                    "description": "【限1次/会话】只读 R 代码，仅用于查看行名/列名/表头。禁止跑分析、改数据、绕过工具失败。",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "code": {
-                                "type": "string",
-                                "description": "要执行的 R 代码"
-                            }
+                            "code": {"type": "string", "description": "只读 R 代码"}
                         },
                         "required": ["code"]
                     }
                 }
             })
-            print(f"[OK] Loaded {len(ai_tools_schema)} tools into schema (incl. execute_r)")
+            # 添加技能相关函数
+            ai_tools_schema.extend([
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_skills",
+                        "description": "列出所有可用的分析技能（多步骤自动化工作流）",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_skill_info",
+                        "description": "获取某个技能的完整定义，包括所有步骤和可覆盖的参数。调用 run_skill 前先用此工具了解技能结构。",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "skill_id": {"type": "string", "description": "技能ID"}
+                            },
+                            "required": ["skill_id"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "run_skill",
+                        "description": "执行一个技能（多步骤分析工作流）。优先使用技能而非逐个调用工具——技能更可靠、步骤更少、不易出错。覆盖参数格式: {\"step_id\": {\"param\": value}}，用于传入动态参数如contrast、deg_input",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "skill_id": {"type": "string", "description": "技能ID"},
+                                "overrides_json": {"type": "string", "description": "JSON格式的参数覆盖", "default": "{}"}
+                            },
+                            "required": ["skill_id"]
+                        }
+                    }
+                }
+            ])
+            print(f"[OK] Loaded {len(ai_tools_schema)} tools into schema (incl. execute_r + 3 skill fns)")
         except Exception as e:
             print(f"[WARN] Tool load failed: {e}")
             import traceback
@@ -166,9 +212,17 @@ def build_tools_schema(tools: list) -> list:
             elif ptype == "boolean":
                 prop["type"] = "boolean"
             elif ptype == "select":
+                if pdef.get("multiple"):
+                    prop["type"] = "array"
+                    prop["items"] = {"type": "string"}
                 choices = pdef.get("choices", [])
                 if choices and len(choices) > 0:
-                    prop["enum"] = choices
+                    if pdef.get("multiple"):
+                        prop["items"]["enum"] = choices
+                    else:
+                        prop["enum"] = choices
+                elif not pdef.get("multiple"):
+                    prop["description"] = (prop.get("description", "") + "（选项动态加载）").strip()
 
             if pdef.get("min") is not None:
                 prop["minimum"] = pdef["min"]
@@ -196,26 +250,15 @@ def build_tools_schema(tools: list) -> list:
     return schema
 
 
-SYSTEM_PROMPT = """你是 seqTools 生物信息学分析助手。
+SYSTEM_PROMPT = """你是 seqTools 助手。第一步必须调 get_state() 看数据。
 
-重要规则：
-1. **必须使用可用工具函数**（通过 function calling）来操作数据，禁止在文本中虚构工具调用结果或假装执行操作。
-2. 调用工具时，按需调用，不要一次性调用全部工具。
-3. 首次对话必须先调用 get_state 查看工作区和数据状态，再根据数据情况选择后续分析。
-4. **`execute_r` 是只读的** — 可以用它查看数据、画图、测试代码，但任何修改都不会被保存。
-5. 如果用户需要修改数据（过滤、转换、新增分析等），必须在 `R/tools/` 下创建对应的工具文件（参考现有工具的格式），然后通过工具调用执行。你可以帮用户生成工具文件的代码，但需要用户确认后放入 `R/tools/` 目录。
-6. **工具调用结果不直接在对话中展示** — 工具调用完成后，提示用户点击 Shiny 界面中的「同步AI结果」按钮，然后使用 `vis` 工具（结果查看）来查看结果，例如："PCA图已生成，请在 Shiny 中点击「同步AI结果」按钮，然后使用 vis('pca_plot') 查看"。不需要在对话中虚构或描述图形内容。
-7. 提供中文回答，简洁专业。
+工具（run_tool）和技能（run_skill）是两回事。不确定工具名时先调 list_tools() 查。
 
-输出规范：
-- 每步完成后用 1-2 句总结做了什么
-- 给出当前数据状态
-- 最后提出下一步建议（如果还有可执行的操作）
-
-注意事项：
-- 不要暴露文件绝对路径
-- 如果工具调用失败，如实报告错误，不要虚构结果
-- 单个任务最多调用 5 次工具"""
+1. get_state() → list_tools() → run_tool()。
+2. 不猜工具名、不猜基因名。失败 2 次停，原样报错。
+3. 完成后说"完成"。execute_r 限 1 次。
+4. 缺功能 → 参考 R/tools/_example_template.R.example 格式写新工具，贴代码给用户。
+5. 中文，不超过 3 句。"""
 
 
 @app.get("/health")
@@ -245,10 +288,32 @@ async def sync_project(data: dict):
         if not rds_path or not os.path.exists(rds_path):
             return {"success": False, "error": f"rds_path not found: {rds_path}"}
         import shutil
-        shutil.copy2(rds_path, r_bridge._state_file)
+        # 原子写入：先写到临时文件再 rename，防止 AI 并发读到半截文件
+        tmp = r_bridge._state_file + ".tmp"
+        shutil.copy2(rds_path, tmp)
+        os.replace(tmp, r_bridge._state_file)
+        # 同步轻量摘要 JSON（供 AI get_state 快速读取）
+        summary_path = data.get("summary_path", "")
+        if summary_path and os.path.exists(summary_path):
+            tmp2 = r_bridge._state_summary_file + ".tmp"
+            shutil.copy2(summary_path, tmp2)
+            os.replace(tmp2, r_bridge._state_summary_file)
+        # 记录版本号，供 pull_state 跳过无变化同步
+        ver = data.get("version", 0)
+        r_bridge._state_version = int(ver) if ver else 0
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+@app.get("/state_version")
+async def state_version():
+    """返回当前状态版本号（轻量，供 Shiny 判断是否需要拉取全量 RDS）"""
+    global r_bridge
+    if r_bridge is None:
+        return Response(content=b"0", media_type="text/plain")
+    return Response(content=str(r_bridge._state_version).encode(),
+                    media_type="text/plain")
 
 
 @app.get("/pull_state")
@@ -270,10 +335,12 @@ async def websocket_endpoint(websocket: WebSocket):
     conversation = []
     cancel_event = asyncio.Event()
     chat_task = None
+    execute_r_count = 0   # 硬限制：每轮最多 1 次
+    tool_call_count = 0   # 硬限制：每轮最多 8 次工具调用
 
     async def run_chat(prompt: str):
         """后台执行完整 AI 对话 + 工具调用循环，可被外部 cancel"""
-        nonlocal conversation
+        nonlocal conversation, execute_r_count, tool_call_count
         if ai_client is None:
             await websocket.send_json({
                 "type": "error",
@@ -282,6 +349,7 @@ async def websocket_endpoint(websocket: WebSocket):
             return
 
         cancel_event.clear()
+        tool_call_count = 0  # 每轮用户消息重置
         conversation.append({"role": "user", "content": prompt})
         print(f"[AI] Start processing: {prompt[:50]}...")
         await websocket.send_json({"type": "thinking"})
@@ -300,19 +368,63 @@ async def websocket_endpoint(websocket: WebSocket):
             if phase == "start":
                 await websocket.send_json({"type": "tool_start", "tool": info["name"]})
             elif phase == "execute":
+                nonlocal tool_call_count
+                if tool_call_count >= 8:
+                    tool_exec_result = {"success": False, "error": "已达本轮工具调用上限（8次）。请直接报告用户结果或询问下一步。"}
+                    return
+                tool_call_count += 1
                 tool_exec_info = info
                 tool_name = info["name"]
                 tool_args = info["arguments"]
                 await websocket.send_json({"type": "tool_executing", "tool": tool_name})
                 try:
                     if tool_name == "reload_tools":
+                        await asyncio.to_thread(r_bridge.reload_tools)
                         tools = await asyncio.to_thread(r_bridge.list_tools)
                         global ai_tools_schema
                         ai_tools_schema = build_tools_schema(tools)
+                        # rebuild skill fns after reload
+                        ai_tools_schema.extend([
+                            {"type":"function","function":{"name":"list_skills","description":"列出所有可用的分析技能","parameters":{"type":"object","properties":{}}}},
+                            {"type":"function","function":{"name":"get_skill_info","description":"获取技能详情和步骤","parameters":{"type":"object","properties":{"skill_id":{"type":"string","description":"技能ID"}},"required":["skill_id"]}}},
+                            {"type":"function","function":{"name":"run_skill","description":"执行技能（多步骤工作流）。优先使用。覆盖参数: overrides_json={\"step_id\":{\"param\":value}}","parameters":{"type":"object","properties":{"skill_id":{"type":"string","description":"技能ID"},"overrides_json":{"type":"string","description":"JSON参数覆盖","default":"{}"}},"required":["skill_id"]}}}
+                        ])
                         tool_exec_result = {"success": True, "tools": tools}
                     elif tool_name == "execute_r":
-                        r_code = tool_args.get("code", "")
-                        tool_exec_result = await asyncio.to_thread(r_bridge.run_r_code, r_code)
+                        nonlocal execute_r_count
+                        if execute_r_count >= 1:
+                            tool_exec_result = {"success": False, "error": "execute_r 已达上限（每会话1次）。请用 run_tool 或直接报告用户。"}
+                        else:
+                            execute_r_count += 1
+                            r_code = tool_args.get("code", "")
+                            raw_result = await asyncio.to_thread(r_bridge.run_r_code, r_code)
+                            reminder = "\n\n【⚠️ execute_r 提醒】仅用于数据探索。不要重复调用。"
+                            if isinstance(raw_result, dict):
+                                msg = raw_result.get("message", raw_result.get("error", ""))
+                                raw_result["message"] = str(msg) + reminder
+                            tool_exec_result = raw_result
+                    elif tool_name == "list_skills":
+                        skills = await asyncio.to_thread(r_bridge.list_skills)
+                        tool_exec_result = {"success": True, "skills": skills, "count": len(skills)}
+                    elif tool_name == "get_skill_info":
+                        sid = tool_args.get("skill_id", "")
+                        skill = await asyncio.to_thread(r_bridge.get_skill, sid)
+                        tool_exec_result = {"success": True, "skill": skill} if skill else {"success": False, "error": f"Skill not found: {sid}"}
+                    elif tool_name == "run_skill":
+                        sid = tool_args.get("skill_id", "")
+                        overrides_str = tool_args.get("overrides_json", "{}")
+                        try:
+                            overrides = json.loads(overrides_str) if overrides_str else {}
+                        except Exception:
+                            overrides = {}
+                        tool_exec_result = await asyncio.to_thread(r_bridge.run_skill, sid, overrides)
+                    elif tool_name == "list_tools":
+                        tools = await asyncio.to_thread(r_bridge.list_tools)
+                        names = [f'{t.get("name","")}: {t.get("display_name","")}' for t in tools]
+                        tool_exec_result = {"success": True, "tools": names, "count": len(names)}
+                    elif tool_name == "get_state":
+                        # 优先用缓存 JSON 摘要（毫秒级），跳过 R 子进程
+                        tool_exec_result = await asyncio.to_thread(r_bridge.get_cached_state)
                     else:
                         tool_exec_result = await asyncio.to_thread(r_bridge.run_tool, tool_name, tool_args)
                 except Exception as e:
@@ -347,7 +459,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             tool_was_called = True
                             break
 
-                await asyncio.wait_for(do_chat(), timeout=120.0)
+                await asyncio.wait_for(do_chat(), timeout=300.0)
 
                 if cancel_event.is_set():
                     return
@@ -396,66 +508,60 @@ async def websocket_endpoint(websocket: WebSocket):
             print(f"[AI] Exception: {e}")
             await websocket.send_json({"type": "error", "error": str(e)})
 
-    # ===================== 主循环：并发接收消息 + 管理聊天任务 =====================
+    # ===================== 主循环：消息队列 + 后台接收器（避免 asyncio.wait 竞态） =====================
+    message_queue = asyncio.Queue()
+
+    async def message_receiver():
+        """后台持续接收 WebSocket 消息，放入队列"""
+        try:
+            while True:
+                msg = await websocket.receive_json()
+                await message_queue.put(msg)
+        except WebSocketDisconnect:
+            await message_queue.put(None)
+        except Exception as e:
+            print(f"[WS] Receiver error: {e}")
+            await message_queue.put(None)
+
+    recv_task = asyncio.create_task(message_receiver())
+
+    async def cancel_chat():
+        """取消当前聊天任务并等待清理"""
+        nonlocal chat_task
+        if chat_task and not chat_task.done():
+            chat_task.cancel()
+            try:
+                await chat_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        chat_task = None
+
     try:
         while True:
-            # 如果聊天在运行，同时等待聊天完成或新消息
-            if chat_task and not chat_task.done():
-                recv_task = asyncio.create_task(websocket.receive_json())
-                done, pending = await asyncio.wait(
-                    [chat_task, recv_task],
-                    return_when=asyncio.FIRST_COMPLETED
-                )
-
-                if chat_task in done:
-                    # 聊天自然结束
-                    try:
-                        await chat_task
-                    except asyncio.CancelledError:
-                        pass
-                    except Exception as e:
-                        print(f"[WS] Chat error: {e}")
-                    chat_task = None
-                    if recv_task in done:
-                        msg = recv_task.result()
-                    else:
-                        recv_task.cancel()
-                        continue
-                else:
-                    # 新消息在聊天期间到达
-                    msg = recv_task.result()
-                    chat_task.cancel()
-                    try:
-                        await chat_task
-                    except (asyncio.CancelledError, Exception):
-                        pass
-                    chat_task = None
-
-                    # 如果是 cancel，给前端发反馈
-                    if msg["type"] == "cancel":
-                        cancel_event.set()
-                        await websocket.send_json({"type": "stream_text", "content": "\n\n[已中断]"})
-                        await websocket.send_json({"type": "stream_done", "full_text": ""})
-                        continue
-            else:
-                chat_task = None
-                msg = await websocket.receive_json()
+            msg = await message_queue.get()
+            if msg is None:
+                break  # WebSocket 断开
 
             # ========== 处理消息 ==========
             if msg["type"] == "cancel":
                 print("[WS] Cancel requested")
                 cancel_event.set()
+                await cancel_chat()
+                await websocket.send_json({"type": "stream_text", "content": "\n\n[已中断]"})
+                await websocket.send_json({"type": "stream_done", "full_text": ""})
                 continue
 
             if msg["type"] == "reset":
                 conversation.clear()
+                await cancel_chat()
                 await websocket.send_json({"type": "stream_done", "full_text": ""})
                 continue
 
             if msg["type"] != "chat":
                 continue
 
-            # 启动新的聊天任务（消息可在其运行时被 cancel）
+            # 新消息到达时取消当前聊天（如果正在运行）
+            await cancel_chat()
             chat_task = asyncio.create_task(run_chat(msg["prompt"]))
 
     except WebSocketDisconnect:
@@ -465,6 +571,8 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         if chat_task and not chat_task.done():
             chat_task.cancel()
+        if recv_task and not recv_task.done():
+            recv_task.cancel()
 
 if __name__ == "__main__":
     import uvicorn

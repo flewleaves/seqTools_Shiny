@@ -23,13 +23,31 @@ server <- function(input, output, session) {
   settings_server("settings", state)
 
   # 双向同步：R6 Project → Shiny reactiveValues（供 UI 渲染）
+  # 只同步轻量的 keys + meta，不复制大矩阵——避免每 5s 触发 GC 和响应式级联
   observe({
-    invalidateLater(2000)
-    state$name       <- state$name %||% engine$project$name
-    state$data       <- engine$project$data
-    state$res        <- engine$project$results
-    state$meta       <- engine$project$meta
-    state$omics_type <- engine$project$omics_type
+    invalidateLater(5000)
+    isolate({
+      r6_name  <- engine$project$name
+      r6_omics <- engine$project$omics_type
+      r6_meta  <- engine$project$meta
+
+      new_name <- state$name %||% r6_name
+      if (!identical(state$name, new_name)) state$name <- new_name
+
+      # 只同步名字快照，不碰 data/res 本体
+      data_key <- paste(names(engine$project$data), collapse = ",")
+      if (!identical(state$data_keys, data_key))
+        state$data_keys <- data_key
+
+      res_key <- paste(names(engine$project$results), collapse = ",")
+      if (!identical(state$res_keys, res_key))
+        state$res_keys <- res_key
+
+      state$meta <- r6_meta
+
+      if (!identical(state$omics_type, r6_omics))
+        state$omics_type <- r6_omics
+    })
   })
 }
 

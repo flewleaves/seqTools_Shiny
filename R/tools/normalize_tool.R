@@ -4,6 +4,7 @@
 TOOL_NAME <- "normalize"
 TOOL_CATEGORY <- "数据处理"
 TOOL_OMICS <- "bulk_rna"
+TOOL_ORDER <- 15
 TOOL_DISPLAY_NAME <- "标准化"
 
 TOOL_SCHEMA <- list(
@@ -53,7 +54,8 @@ TOOL_RUN <- function(inputs, project) {
 
   list(
     data = res$matrix,
-    messages = c(res$note, if (isTRUE(inputs$log_transform)) paste("log转化:", lb))
+    messages = c(res$note, if (isTRUE(inputs$log_transform)) paste("log转化:", lb)),
+    method_info = record_method("normalize", "标准化", paste0("Seurat::", inputs$method), "Seurat", inputs)
   )
 }
 

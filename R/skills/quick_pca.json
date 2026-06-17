@@ -1,0 +1,24 @@
+{
+  "name": "quick_pca",
+  "display_name": "快速PCA分析",
+  "description": "快速主成分分析：Log2归一化 → PCA降维 → 样本散点图。适用于快速查看样本分组趋势和批次效应。",
+  "category": "pipeline",
+  "version": "1.0.0",
+  "author": "seqTools",
+  "omics": ["bulk_rna"],
+  "tags": ["PCA", "QC", "降维", "质控"],
+  "steps": [
+    {
+      "id": "normalize_data",
+      "tool": "normalize",
+      "params": {"method": "log2"},
+      "description": "Log2归一化"
+    },
+    {
+      "id": "run_pca",
+      "tool": "pca",
+      "params": {},
+      "description": "PCA主成分分析"
+    }
+  ]
+}

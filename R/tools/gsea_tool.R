@@ -2,6 +2,7 @@
 TOOL_NAME         <- "gsea"
 TOOL_CATEGORY     <- "差异/富集分析"
 TOOL_OMICS        <- "bulk_rna"
+TOOL_ORDER        <- 25
 TOOL_DISPLAY_NAME <- "GSEA分析"
 
 TOOL_SCHEMA <- list(
@@ -58,12 +59,28 @@ TOOL_RUN <- function(inputs, project) {
   # 存为两个键：gsea_obj（gseaResult）和 gsea_dotplot（ggplot）
   list(
     data     = list(obj = gsea_res$result, dotplot = dotplot$plot),
-    messages = c(gsea_res$note, dotplot$note)
+    messages = c(gsea_res$note, dotplot$note),
+    method_info = record_method("gsea", "GSEA分析", "clusterProfiler::GSEA", "clusterProfiler", inputs)
   )
 }
 
 # engine$run 存为 gsea_obj 和 gsea_dotplot
+# 多图输出示例：两个 tab，各自从 objs 列表中取所需对象
 TOOL_OUTPUTS <- list(
-  plot  = function(result) if (inherits(result, "ggplot")) result else NULL,
+  plot = list(
+    dotplot = function(objs) {
+      for (o in objs) if (inherits(o, "ggplot")) return(o)
+      NULL
+    },
+    enrich = function(objs) {
+      for (o in objs) if (inherits(o, "gseaResult") && nrow(o@result) > 0) {
+        return(tryCatch(
+          enrichplot::gseaplot2(o, geneSetID = 1, title = o@result$Description[1]),
+          error = function(e) NULL
+        ))
+      }
+      NULL
+    }
+  ),
   table = function(result) if (inherits(result, "gseaResult")) result@result else NULL
 )

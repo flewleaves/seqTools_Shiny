@@ -1,0 +1,44 @@
+{
+  "name": "sc_visualize",
+  "display_name": "单细胞可视化",
+  "description": "单细胞数据可视化套装：DimPlot(聚类图)、VlnPlot(小提琴图)、DotPlot(点图)、FeaturePlot(特征图)。需要已完成聚类的Seurat对象。",
+  "category": "pipeline",
+  "version": "2.0.0",
+  "author": "seqTools",
+  "omics": ["single_cell"],
+  "steps": [
+    {
+      "id": "dimplot",
+      "tool": "sc_dimplot",
+      "params": {
+        "group_by": "seurat_clusters",
+        "reduction": "umap"
+      },
+      "description": "UMAP降维聚类图(SCP::CellDimPlot)"
+    },
+    {
+      "id": "dotplot",
+      "tool": "sc_dotplot",
+      "params": {
+        "group_by": "seurat_clusters"
+      },
+      "description": "标记基因表达点图(Seurat::DotPlot)。需通过 overrides 传入 genes=<逗号分隔基因名>"
+    },
+    {
+      "id": "vlnplot",
+      "tool": "sc_vlnplot",
+      "params": {
+        "group_by": "seurat_clusters"
+      },
+      "description": "基因表达小提琴图(Seurat::VlnPlot)。需通过 overrides 传入 genes=<逗号分隔基因名>"
+    },
+    {
+      "id": "featureplot",
+      "tool": "sc_featureplot",
+      "params": {
+        "reduction": "umap"
+      },
+      "description": "基因表达UMAP特征图(Seurat::FeaturePlot)。需通过 overrides 传入 genes=<逗号分隔基因名>"
+    }
+  ]
+}

@@ -18,15 +18,19 @@ settings_ui <- function(id) {
     ),
     card(
       card_header("分析参数"),
-      selectInput(ns("set_norm"), "归一化", choices = c("log2", "log10", "None")),
-      numericInput(ns("set_seed"), "随机种子", value = 42),
-      numericInput(ns("set_pval"), "p值阈值", value = 0.05, min = 0.001, step = 0.01),
-      numericInput(ns("set_logfc"), "logFC 阈值", value = 1, min = 0, max = 5, step = 0.1),
       selectInput(ns("set_dup"), "基因去重策略", choices = c("kmax", "max", "mean"))
     ),
     card(
       card_header("系统设置"),
-      textInput(ns("work_dir"), "工作目录", value = ".")
+      tags$div(
+        tags$label("工作目录"),
+        tags$div(
+          style = "display:flex; gap:6px;",
+          textInput(ns("work_dir"), NULL, value = ".") |>
+            tagAppendAttributes(style = "flex:1; margin-bottom:0;"),
+          actionButton(ns("browse_dir"), "浏览...", class = "btn-outline-secondary btn-sm")
+        )
+      )
     ),
     col_widths = c(4, 4, 4)
   )
@@ -71,11 +75,7 @@ settings_server <- function(id, state) {
       updateTextInput(session, "ai_base_url", value = saved_url)
       
       updateTextInput(session, "work_dir", value = s$system$work_dir %||% ".")
-      updateSelectInput(session, "set_norm", selected = s$analysis$norm_method %||% "log2")
       updateSelectInput(session, "set_dup", selected = s$analysis$dup %||% "kmax")
-      updateNumericInput(session, "set_pval", value = s$analysis$pval_cut %||% 0.05)
-      updateNumericInput(session, "set_logfc", value = s$analysis$logfc_cut %||% 1)
-      updateNumericInput(session, "set_seed", value = s$analysis$seed %||% 42)
     })
 
     # 切换 provider 时：自动填充推荐地址和模型（仅当用户没手动改过 base_url 时）
@@ -142,12 +142,40 @@ settings_server <- function(id, state) {
       })
     })
 
+
+    observeEvent(input$browse_dir, {
+      cur_path <- tryCatch(
+        normalizePath(input$work_dir %||% ".", mustWork = FALSE),
+        error = function(e) "."
+      )
+      ps1 <- tempfile(fileext = ".ps1")
+      writeLines(c(
+        'Add-Type -AssemblyName System.Windows.Forms',
+        '$d = New-Object System.Windows.Forms.FolderBrowserDialog',
+        '$d.Description = "Select Working Directory"',
+        paste0('$d.SelectedPath = "', cur_path, '"'),
+        '$d.ShowNewFolderButton = $true',
+        'if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {',
+        '    Write-Output $d.SelectedPath',
+        '}'
+      ), ps1)
+      result <- tryCatch(
+        system2("powershell",
+                args = c("-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", ps1),
+                stdout = TRUE, stderr = FALSE, wait = TRUE),
+        error = function(e) character(0)
+      )
+      if (length(result) > 0 && nzchar(trimws(result[1]))) {
+        path <- normalizePath(trimws(result[1]), winslash = "/", mustWork = FALSE)
+        updateTextInput(session, "work_dir", value = path)
+      }
+    }, ignoreInit = TRUE)
+
     # 保存配置
     save_trigger <- reactive({
       list(
         input$ai_provider, input$ai_model, input$ai_key, input$ai_base_url,
-        input$set_norm, input$set_pval, input$set_logfc, input$set_dup, input$set_seed,
-        input$work_dir
+        input$set_dup, input$work_dir
       )
     }) %>% debounce(10000)
 
@@ -159,12 +187,7 @@ settings_server <- function(id, state) {
       }
       
       # 先读现有配置，保留 key（不用 configr，避免键名错位 bug）
-      existing <- tryCatch(
-        load_config(),
-        error = function(e) list(AI = list(key = ""))
-      )
-      
-      # 如果 UI 的 key 为空（passwordInput 保护），保留文件里的 key
+      existing <- tryCatch(load_config(), error = function(e) list(AI = list(key = "")))
       key_to_save <- input$ai_key
       if (is.null(key_to_save) || key_to_save == "") {
         key_to_save <- existing$AI$key %||% ""
@@ -178,10 +201,10 @@ settings_server <- function(id, state) {
           base_url = input$ai_base_url   # ← 直接存 UI 里的值，不做推断
         ),
         analysis = list(
-          norm_method = input$set_norm,
-          pval_cut    = input$set_pval,
-          logfc_cut   = input$set_logfc,
-          seed        = input$set_seed,
+          norm_method = "log2",
+          pval_cut    = 0.05,
+          logfc_cut   = 1,
+          seed        = 42,
           dup         = input$set_dup
         ),
         system = list(work_dir = input$work_dir)

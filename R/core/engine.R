@@ -45,6 +45,28 @@ AnalysisEngine <- R6Class("AnalysisEngine",
         schema = list(),
         run = function(inputs, project) {
           st <- project$to_list()
+          wd <- tryCatch(get("APP_WORK_DIR", envir = .GlobalEnv), error = function(e) getwd())
+          ws_files <- if (dir.exists(wd)) list.files(wd,
+            pattern = "\\.(rds|h5|txt|csv|tsv|gz|mtx)$",
+            ignore.case = TRUE, recursive = TRUE) else character(0)
+
+          # 提取 Seurat 对象的摘要信息
+          seurat_info <- list()
+          for (nm in names(st$data)) {
+            d <- st$data[[nm]]
+            if (identical(d$type, "Seurat")) {
+              seurat_info[[nm]] <- list(
+                cells = d$cells,
+                genes = d$genes,
+                meta_cols = d$meta_cols,
+                reductions = d$reductions,
+                assays = d$assays,
+                cluster_cols = d$cluster_cols,
+                active_ident = head(d$active_ident, 30)
+              )
+            }
+          }
+
           list(
             data = list(
               project = st$name,
@@ -52,7 +74,10 @@ AnalysisEngine <- R6Class("AnalysisEngine",
               data_keys = names(st$data),
               meta_keys = names(st$meta),
               result_names = names(st$results),
-              data_dim = if (length(st$data) > 0 && !is.null(st$data[[1]])) dim(st$data[[1]]) else c(0, 0)
+              data_detail = st$data,
+              seurat = if (length(seurat_info) > 0) seurat_info else NULL,
+              work_dir = wd,
+              workspace_files = head(ws_files, 30)
             ),
             meta = list(timestamp = format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
           )
@@ -68,9 +93,19 @@ AnalysisEngine <- R6Class("AnalysisEngine",
       clean_inputs <- private$validate_inputs(inputs, tool$schema)
       result <- tool$run(clean_inputs, self$project)
 
-      # ===== 导入工具：直接操作 project$data/meta/omics_type，不存 results =====
-      if (!is.null(tool$category) && tool$category == "import") {
+      # ===== 导入/系统工具：不存 results =====
+      if (!is.null(tool$category) && tool$category %in% c("import", "system")) {
         return(list(success = TRUE, result = result, project_state = self$project$to_list()))
+      }
+
+      # ===== 记录分析方法（底层函数+版本+参数） =====
+      if (!is.null(result$method_info)) {
+        if (is.null(self$project$results$`_methods`))
+          self$project$results$`_methods` <- list()
+        # tool_id 为 key，重复运行自动覆盖
+        self$project$results$`_methods`[[tool_id]] <- result$method_info
+        # 清理 method_info，不混入结果数据
+        result$method_info <- NULL
       }
 
       # ===== 分析工具：原有逻辑 =====
@@ -94,20 +129,30 @@ AnalysisEngine <- R6Class("AnalysisEngine",
 
   private = list(
     validate_inputs = function(inputs, schema) {
+      # 辅助：检测无效值（缺失 / NULL / 空字符串 / NA）
+      is_blank <- function(v) {
+        if (is.null(v)) return(TRUE)
+        if (identical(v, "")) return(TRUE)
+        (length(v) == 1 && is.na(v) && !is.logical(v))  # NA_real_ / NA_integer_ / NA_character_
+      }
+
       cleaned <- inputs
       for (name in names(schema)) {
         def <- schema[[name]]
 
-        # 应用默认值（AI 可能省略有默认值的可选参数）
-        if ((!name %in% names(cleaned) || is.null(cleaned[[name]])) && !is.null(def$default)) {
+        # 应用默认值：参数缺失 或 为无效值时使用默认值
+        if ((!name %in% names(cleaned) || is_blank(cleaned[[name]])) && !is.null(def$default)) {
           cleaned[[name]] <- def$default
         }
 
-        if (isTRUE(def$required) && (!name %in% names(cleaned) || is.null(cleaned[[name]]) || cleaned[[name]] == "")) {
+        if (isTRUE(def$required) && (!name %in% names(cleaned) || is_blank(cleaned[[name]]))) {
           stop("缺少必填参数: ", name)
         }
         if (!name %in% names(cleaned)) next
         val <- cleaned[[name]]
+
+        # 跳过已为无效值的情况（没有默认值的可选参数，留空不传）
+        if (is_blank(val)) next
 
         # file 类型原样保留（路径字符串）
         if (def$type == "file") {
@@ -126,13 +171,15 @@ AnalysisEngine <- R6Class("AnalysisEngine",
         }
 
         if (def$type %in% c("number","integer")) {
-          if (!is.null(def$min) && cleaned[[name]] < def$min) stop(name, " 必须 >= ", def$min)
-          if (!is.null(def$max) && cleaned[[name]] > def$max) stop(name, " 必须 <= ", def$max)
+          if (!is.null(def$min) && !is.na(cleaned[[name]]) && cleaned[[name]] < def$min)
+            stop(name, " 必须 >= ", def$min)
+          if (!is.null(def$max) && !is.na(cleaned[[name]]) && cleaned[[name]] > def$max)
+            stop(name, " 必须 <= ", def$max)
         }
         # 只在 choices 非空时校验（NULL = 动态填充，跳过）
-        if (!is.null(def$choices) && length(def$choices) > 0 &&
+        if (!is_blank(cleaned[[name]]) &&
+            !is.null(def$choices) && length(def$choices) > 0 &&
             !identical(def$choices, c("")) &&
-            !is.null(cleaned[[name]]) && cleaned[[name]] != "" &&
             !cleaned[[name]] %in% def$choices) {
           stop(name, " 必须是: ", paste(def$choices, collapse = ", "))
         }

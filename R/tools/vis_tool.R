@@ -1,6 +1,7 @@
 # R/tools/vis_tool.R
 TOOL_NAME         <- "vis"
-TOOL_CATEGORY     <- "结果查看"
+TOOL_CATEGORY     <- "数据查看"
+TOOL_ORDER        <- 90
 TOOL_DISPLAY_NAME <- "结果查看"
 
 # choices 留空，UI 层通过 schema_to_ui + state 动态填充

@@ -323,9 +323,12 @@ ai_console_server <- function(id, state) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
-    # AI 工具调用完成后自动同步状态到 Shiny
+    # AI 跑完工具后在聊天窗口提示（不拉取，不阻塞）
     observeEvent(input$ai_refresh, {
-      pull_state_from_python(state)
+      tryCatch(shiny::showNotification(
+        "AI 执行完成，切到分析页点 📥 拉取查看结果",
+        type = "warning", duration = 5, session = session
+      ), error = function(e) NULL)
     })
 
     # 清空对话历史（通知 Python 端重置 conversation）

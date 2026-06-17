@@ -28,7 +28,8 @@ ToolRegistry <- R6Class("ToolRegistry",
               schema       = env$TOOL_SCHEMA,
               run          = env$TOOL_RUN,
               outputs      = env$TOOL_OUTPUTS %||% list(),
-              omics        = env$TOOL_OMICS %||% NULL
+              omics        = env$TOOL_OMICS %||% NULL,
+              order        = env$TOOL_ORDER %||% 99
             ))
             loaded <- c(loaded, env$TOOL_NAME)
           }
@@ -45,6 +46,11 @@ ToolRegistry <- R6Class("ToolRegistry",
       keep_cats <- c("import", "system")
       self$tools <- Filter(function(t) t$category %in% keep_cats, self$tools)
       self$load_directory(path)
+      # 联动重载 skills
+      if (exists("SkillRegistry")) {
+        skills_path <- file.path(dirname(path), "skills")
+        if (dir.exists(skills_path)) SkillRegistry$reload(skills_path)
+      }
     },
 
     # ui_only = TRUE  → 只返回用户可见的分析工具（排除 import/system）
@@ -60,9 +66,13 @@ ToolRegistry <- R6Class("ToolRegistry",
           schema       = t$schema,
           has_plot     = !is.null(t$outputs$plot),
           has_table    = !is.null(t$outputs$table),
-          omics        = t$omics
+          omics        = t$omics,
+          order        = t$order %||% 99
         )
       })
+
+      # 按 order 排序
+      tools <- tools[order(sapply(tools, `[[`, "order"))]
 
       # UI 模式：过滤掉 import 和 system 类工具
       if (ui_only) {

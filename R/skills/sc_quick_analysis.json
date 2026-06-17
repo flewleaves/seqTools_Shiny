@@ -1,0 +1,41 @@
+{
+  "name": "sc_quick_analysis",
+  "display_name": "单细胞一键分析",
+  "description": "一键完成全部流程：导入 → 全流程分析(预处理+标准化+整合+聚类+UMAP) → 标记基因。适合快速探索单细胞数据。",
+  "category": "pipeline",
+  "version": "2.0.0",
+  "author": "seqTools",
+  "omics": ["single_cell"],
+  "steps": [
+    {
+      "id": "import",
+      "tool": "single_cell",
+      "params": {
+        "action": "import",
+        "species": "Hs"
+      },
+      "description": "导入数据：扫描目标目录所有样本（自动识别10X/h5/txt/rds格式）。必填参数 file=<目录路径>，需通过 overrides 传入绝对路径。"
+    },
+    {
+      "id": "quick_pipeline",
+      "tool": "sc_quick_pipeline",
+      "params": {
+        "species": "Hs",
+        "sctransform": false,
+        "doublet_find": false,
+        "cellcycle_scoring": false,
+        "save_to_disk": false
+      },
+      "description": "一键全流程：预处理+标准化+整合+聚类+UMAP"
+    },
+    {
+      "id": "markers",
+      "tool": "sc_markers",
+      "params": {
+        "n": 10,
+        "draw": true
+      },
+      "description": "各cluster标记基因(top 10)"
+    }
+  ]
+}

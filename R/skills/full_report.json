@@ -1,0 +1,42 @@
+{
+  "name": "full_report",
+  "display_name": "完整RNA-seq分析报告",
+  "description": "完整的bulk RNA-seq分析流程：Log2归一化 → DESeq2差异分析 → 火山图 → PCA → GSEA富集分析。生成全面的分析报告。",
+  "category": "pipeline",
+  "version": "1.0.0",
+  "author": "seqTools",
+  "omics": ["bulk_rna"],
+  "tags": ["RNA-seq", "report", "full", "完整分析"],
+  "steps": [
+    {
+      "id": "normalize_data",
+      "tool": "normalize",
+      "params": {"method": "log2"},
+      "description": "Log2归一化"
+    },
+    {
+      "id": "find_degs",
+      "tool": "deg",
+      "params": {"method": "DESeq2", "logFC_threshold": 1, "padj_threshold": 0.05, "filter": true},
+      "description": "DESeq2差异基因筛选"
+    },
+    {
+      "id": "volcano_plot",
+      "tool": "volcano",
+      "params": {},
+      "description": "火山图可视化"
+    },
+    {
+      "id": "run_pca",
+      "tool": "pca",
+      "params": {},
+      "description": "PCA主成分分析"
+    },
+    {
+      "id": "run_gsea",
+      "tool": "gsea",
+      "params": {},
+      "description": "GSEA富集分析"
+    }
+  ]
+}

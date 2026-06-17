@@ -31,10 +31,18 @@ Project <- R6Class("Project",
             list(type = class(x)[1], dims = dim(x),
                  colnames = head(colnames(x), 10), rownames = head(rownames(x), 10))
           } else if (inherits(x, "Seurat")) {
-            list(type = "Seurat", dims = c(
-              x@assays$RNA@counts %>% nrow(),
-              x@assays$RNA@counts %>% ncol()
-            ))
+            mc <- colnames(x@meta.data)
+            list(
+              type = "Seurat",
+              cells = ncol(x),
+              genes = nrow(x),
+              meta_cols = mc,
+              reductions = names(x@reductions),
+              active_ident = if (length(unique(Idents(x))) <= 30)
+                as.character(sort(unique(Idents(x)))) else character(0),
+              cluster_cols = grep("(_snn_res\\.|seurat_clusters|cell_type)", mc, value = TRUE),
+              assays = names(x@assays)
+            )
           } else {
             list(type = class(x)[1])
           }
@@ -52,7 +60,7 @@ Project <- R6Class("Project",
         omics_type = self$omics_type,
         data = self$data,
         meta = self$meta,
-        results = self$results,
+        results = self$results[!grepl("^get_state_", names(self$results))],
         history = self$history,
         settings = self$settings
         # import_registry 不序列化（运行时重新加载）

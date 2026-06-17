@@ -4,6 +4,7 @@
 TOOL_NAME <- "filter"
 TOOL_CATEGORY <- "数据处理"
 TOOL_OMICS <- "bulk_rna"
+TOOL_ORDER <- 10
 TOOL_DISPLAY_NAME <- "数据过滤"
 
 TOOL_SCHEMA <- list(
@@ -29,7 +30,8 @@ TOOL_RUN <- function(inputs, project) {
 
   list(
     data = res$mats,
-    messages = c(res$note, res$stats)
+    messages = c(res$note, res$stats),
+    method_info = record_method("filter", "数据过滤", "手动过滤", "base", inputs)
   )
 }
 

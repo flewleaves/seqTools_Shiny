@@ -1,0 +1,20 @@
+{
+  "name": "sc_import",
+  "display_name": "单细胞数据导入",
+  "description": "导入单细胞数据并完成QC过滤。扫描目录自动识别10X/h5/txt/rds格式，导入后在数据页展示小提琴图供用户确认过滤参数。",
+  "category": "pipeline",
+  "version": "1.0.0",
+  "author": "seqTools",
+  "omics": ["single_cell"],
+  "steps": [
+    {
+      "id": "import",
+      "tool": "single_cell",
+      "params": {
+        "action": "import",
+        "species": "Hs"
+      },
+      "description": "导入单细胞数据。必填参数 file=<目录绝对路径>。支持的格式：子目录含10X三件套(matrix/features/barcodes)、.h5文件、.rds Seurat对象、.txt/.csv count矩阵。"
+    }
+  ]
+}

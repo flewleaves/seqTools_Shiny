@@ -1,6 +1,8 @@
 # R/tools/volcano_tool.R
 TOOL_NAME         <- "volcano"
 TOOL_CATEGORY     <- "数据绘图"
+TOOL_OMICS        <- "bulk_rna"
+TOOL_ORDER        <- 40
 TOOL_DISPLAY_NAME <- "火山图"
 
 TOOL_SCHEMA <- list(
@@ -44,7 +46,8 @@ TOOL_RUN <- function(inputs, project) {
     max.overlaps    = inputs$vol_maxo
   )
 
-  list(data = list(plot = res$plot), messages = res$note)
+  list(data = list(plot = res$plot), messages = res$note,
+       method_info = record_method("volcano", "火山图", "ggplot2", "ggplot2", inputs))
 }
 
 TOOL_OUTPUTS <- list(

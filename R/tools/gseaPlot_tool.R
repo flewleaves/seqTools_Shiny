@@ -2,6 +2,7 @@
 TOOL_NAME         <- "gseaPlot"
 TOOL_CATEGORY     <- "数据绘图"
 TOOL_OMICS        <- "bulk_rna"
+TOOL_ORDER        <- 30
 TOOL_DISPLAY_NAME <- "GSEA通路图"
 
 TOOL_SCHEMA <- list(
@@ -28,7 +29,8 @@ TOOL_RUN <- function(inputs, project) {
     pvalY      = inputs$y_gsea
   )
 
-  list(data = list(plot = res$plot), messages = res$note)
+  list(data = list(plot = res$plot), messages = res$note,
+       method_info = record_method("gseaPlot", "GSEA通路图", "GseaVis::gseaNb", "GseaVis", inputs))
 }
 
 TOOL_OUTPUTS <- list(

@@ -4,14 +4,15 @@
 schema_to_ui <- function(schema, ns, state) {
   if (length(schema) == 0) return(NULL)
 
-  # 在调用时立即快照，避免 modal 里响应式丢失
-  # 确保是 character 向量，state 为空时 names() 返回 NULL 会导致 startsWith 报错
-  data_keys   <- as.character(names(state$data)   %||% character(0))
-  result_keys <- as.character(names(state$res)    %||% character(0))
+  # isolate 切断响应式依赖——modal 弹出时读一次快照，不随 state$data 轮询重执行
+  data_keys   <- isolate(strsplit(state$data_keys %||% "", ",")[[1]])
+  data_keys   <- data_keys[nzchar(data_keys)]
+  result_keys <- isolate(strsplit(state$res_keys %||% "", ",")[[1]])
+  result_keys <- result_keys[nzchar(result_keys)]
   vis_result_keys <- if (length(result_keys) > 0)
-    result_keys[!startsWith(result_keys, "vis_")]
+    result_keys[!startsWith(result_keys, "vis_") & !startsWith(result_keys, "_")]
   else character(0)
-  group_info  <- state$meta$group_info
+  group_info  <- isolate(state$meta$group_info)
 
   controls <- lapply(names(schema), function(id) {
     def     <- schema[[id]]
@@ -30,13 +31,49 @@ schema_to_ui <- function(schema, ns, state) {
           if (length(data_keys) > 0) data_keys else c("暂无数据" = "")
         },
 
-        # 结果查看：排除 vis_ 自身结果，按类型分组显示
+        # 结果查看：只显示可可视化的对象
         vis = {
+          can_show <- function(key) {
+            obj <- engine$project$results[[key]] %||% engine$project$data[[key]]
+            if (is.null(obj) || is.environment(obj)) return(FALSE)
+            if (inherits(obj, c("gg","ggplot","gseaResult","Seurat","data.frame","matrix","dgCMatrix"))) return(TRUE)
+            if (is.list(obj)) return(FALSE)
+            FALSE
+          }
+          vis_data <- data_keys[!startsWith(data_keys, "_")]
+          vis_res <- vis_result_keys[!startsWith(vis_result_keys, "_")]
+          vis_res <- vis_res[sapply(vis_res, can_show)]
           all_keys <- c(
-            setNames(data_keys,        paste0("[数据] ", data_keys)),
-            setNames(vis_result_keys,  paste0("[结果] ", vis_result_keys))
+            if (length(vis_data) > 0) setNames(vis_data, paste0("[数据] ", vis_data)),
+            if (length(vis_res) > 0)  setNames(vis_res,  paste0("[结果] ", vis_res))
           )
           if (length(all_keys) > 0) all_keys else c("暂无数据" = "")
+        },
+
+        # meta.data 列名（动态读取 Seurat 对象）
+        target_group = {
+          cl <- engine$project$meta$sc_cluster_ids
+          if (is.null(cl)) {
+            cl <- tryCatch({
+              sc_key <- sc_find_seurat_key(engine$project, NULL)
+              sobj <- sc_load_from_disk(engine$project, sc_key)
+              if (inherits(sobj, "Seurat")) {
+                cl <- sort(unique(as.character(Idents(sobj))))
+                cl <- cl[!is.na(cl) & nzchar(cl)]
+                engine$project$meta$sc_cluster_ids <- cl
+              } else NULL
+            }, error = function(e) NULL)
+          }
+          if (length(cl) > 0) setNames(cl, cl) else c("暂无数据" = "")
+        },
+        group_by = ,
+        split_by = ,
+        anno_by = ,
+        ident_group = ,
+        cluster_col = {
+          # 只显示分类列（唯一值 ≤ 50），避免 nCount_RNA 等连续变量
+          cols <- sc_get_categorical_cols(engine$project)
+          if (length(cols) > 0) cols else c("暂无数据" = "")
         },
 
         # 对比组
@@ -65,9 +102,31 @@ schema_to_ui <- function(schema, ns, state) {
     # ---------- 生成控件 ----------
     if (type == "select") {
       if (is.null(choices) || length(choices) == 0) choices <- c("暂无数据" = "")
-      selectInput(ns(id), label,
-                  choices  = choices,
-                  selected = def$default %||% choices[[1]])
+      # 非必填 select 首项加入「全部」，传入 "All_Cells"，tool 层临时添加 meta.data 列
+      # 使用实际列名而非空字符串，兼容 Shiny selectInput 且无需特殊过滤
+      if (!isTRUE(def$required) && !isTRUE(def$multiple))
+        choices <- c("全部 (不分组)" = "All_Cells", choices)
+      # cascade_from：先用占位控件，由 analysis.R 的 observer 动态填充
+      if (!is.null(def$cascade_from)) {
+        placeholder <- c("请先选择分组列" = "")
+        if (isTRUE(def$multiple)) {
+          return(checkboxGroupInput(ns(id), label,
+            choiceNames = names(placeholder), choiceValues = unname(placeholder)))
+        } else {
+          return(selectInput(ns(id), label, choices = placeholder))
+        }
+      }
+      if (isTRUE(def$multiple)) {
+        if (is.null(names(choices))) choices <- setNames(choices, choices)
+        checkboxGroupInput(ns(id), label,
+          choiceNames  = names(choices),
+          choiceValues = unname(choices),
+          selected = def$default)
+      } else {
+        selectInput(ns(id), label,
+                    choices  = choices,
+                    selected = def$default %||% choices[[1]])
+      }
 
     } else if (type == "boolean") {
       checkboxInput(ns(id), label,

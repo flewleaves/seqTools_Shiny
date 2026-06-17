@@ -1,0 +1,36 @@
+{
+  "name": "gsea_analysis",
+  "display_name": "GSEA富集分析流程",
+  "description": "完整的基因集富集分析：Log2归一化 → DESeq2差异分析 → GSEA富集 → 富集图可视化。适用于功能注释和通路分析。",
+  "category": "pipeline",
+  "version": "1.0.0",
+  "author": "seqTools",
+  "omics": ["bulk_rna"],
+  "tags": ["GSEA", "enrichment", "pathway", "富集分析"],
+  "steps": [
+    {
+      "id": "normalize_data",
+      "tool": "normalize",
+      "params": {"method": "log2"},
+      "description": "Log2归一化"
+    },
+    {
+      "id": "find_degs",
+      "tool": "deg",
+      "params": {"method": "DESeq2", "logFC_threshold": 0, "padj_threshold": 1, "filter": true},
+      "description": "DESeq2差异分析（保留全部基因用于GSEA排序）"
+    },
+    {
+      "id": "run_gsea",
+      "tool": "gsea",
+      "params": {},
+      "description": "GSEA基因集富集分析"
+    },
+    {
+      "id": "gsea_plot",
+      "tool": "gseaPlot",
+      "params": {},
+      "description": "GSEA富集结果可视化"
+    }
+  ]
+}
